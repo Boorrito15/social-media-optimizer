@@ -1,0 +1,35 @@
+# Byte-compiled / Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Data & Video Binaries (Do not commit raw videos or frames)
+data/raw/
+data/processed/*.mp4
+data/processed/*.jpeg
+*.mp4
+*.m4a
+*.jpeg
+*.jpg
+*.png
+
+# Environment Variables & Keys
+.env
+*.json
+!config/*.json
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
