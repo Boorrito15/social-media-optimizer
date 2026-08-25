@@ -1,0 +1,20 @@
+# Data & Ingestion
+yt-dlp
+opencv-python-headless
+pandas
+polars
+pyarrow
+
+# ML & NLP
+torch
+google-genai
+openai-whisper
+xgboost
+scikit-learn
+
+# UI & Visualization
+streamlit
+plotly
+
+# Dev Tools
+python-dotenv
