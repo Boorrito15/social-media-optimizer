@@ -1,19 +1,23 @@
-"""Real-Time Zero-Flicker MinionsScout Yellow Live Dashboard with EMA Smoothing.
+"""Real-Time Zero-Flicker MinionsScout SSE Streaming Live Dashboard.
 
-Brand Identity:
-- Name: MinionsScout
-- Theme: Minions Electric Yellow (#FFE01B / #F5C518), Obsidian (#111111), Denim Blue (#1E3A8A)
-- Ultra-smooth Exponential Moving Average (EMA) stabilized Speed & ETA backend
+Key Capabilities:
+- Server-Sent Events (SSE) `/api/stream` (pushes every 250-300ms) with auto-reconnect & polling fallback.
+- Client-side dynamic local timezone detection & formatting (Intl.DateTimeFormat).
+- 60+ FPS Numeric Lerp Interpolation & Liquid Spring Progress Bars.
+- Embedded Hardware-Accelerated 480p Video Preview Player (`/api/video/latest`) with zero CLS & ambient glow.
+- Exponential Moving Average (EMA) stabilized speed and ETA backend.
 """
 
 from collections import deque
 import http.server
 import json
+import os
+import re
 import socketserver
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Ensure project root is in sys.path
@@ -37,17 +41,32 @@ STATE = {
     "tiktok": 0,
     "youtube": 0,
     "recent": [],
-    "last_updated": "Initializing...",
+    "last_updated_iso": datetime.now(timezone.utc).isoformat(),
     "vpm": 0.0,
     "vph": 0,
-    "eta_time": "--:--",
+    "eta_seconds": 0,
+    "eta_iso": "",
     "eta_sub": "Calibrating speed...",
     "window_size": 0,
+    "active_downloads": [],
+    "latest_video_name": "",
 }
 
 HISTORY = deque(maxlen=500)
 SMOOTH_VPM = None
 SMOOTH_SECONDS_LEFT = None
+
+
+def get_latest_local_video() -> Path | None:
+    data_dir = Path(__file__).resolve().parent.parent.parent / "data" / "videos"
+    if not data_dir.exists():
+        return None
+    videos = sorted(
+        [p for p in data_dir.glob("*/*_480p.mp4") if p.is_file() and p.stat().st_size > 10000],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return videos[0] if videos else None
 
 
 def background_gcs_scanner():
@@ -62,6 +81,8 @@ def background_gcs_scanner():
             yt = sum(1 for o in objs if "videos/youtube/" in o)
             
             recent = [o.replace("videos/", "") for o in sorted(objs, reverse=True) if o.endswith(".mp4")][:8]
+            latest_vid = get_latest_local_video()
+            latest_name = latest_vid.name if latest_vid else (recent[0] if recent else "sample.mp4")
             
             current_meta = fb + ig
             now = time.time()
@@ -101,19 +122,21 @@ def background_gcs_scanner():
                 else:
                     SMOOTH_SECONDS_LEFT = (0.10 * raw_seconds_left) + (0.90 * SMOOTH_SECONDS_LEFT)
                 
-                eta_dt = datetime.now() + timedelta(seconds=SMOOTH_SECONDS_LEFT)
+                eta_dt_utc = datetime.now(timezone.utc) + timedelta(seconds=SMOOTH_SECONDS_LEFT)
                 
                 hours = int(SMOOTH_SECONDS_LEFT // 3600)
                 minutes = int((SMOOTH_SECONDS_LEFT % 3600) // 60)
                 
-                eta_time = eta_dt.strftime("%H:%M")
                 eta_sub = f"in ~{hours}h {minutes}m (EMA stabilized)"
                 vpm_display = round(SMOOTH_VPM, 1)
                 vph_display = int(SMOOTH_VPM * 60.0)
+                eta_seconds = int(SMOOTH_SECONDS_LEFT)
+                eta_iso = eta_dt_utc.isoformat()
             else:
                 vpm_display = 0.0
                 vph_display = 0
-                eta_time = "--:--"
+                eta_seconds = 0
+                eta_iso = ""
                 eta_sub = "Sampling downloads..."
             
             STATE.update({
@@ -122,24 +145,27 @@ def background_gcs_scanner():
                 "tiktok": tt,
                 "youtube": yt,
                 "recent": recent,
-                "last_updated": datetime.now().strftime("%H:%M:%S"),
+                "last_updated_iso": datetime.now(timezone.utc).isoformat(),
                 "vpm": vpm_display,
                 "vph": vph_display,
-                "eta_time": eta_time,
+                "eta_seconds": eta_seconds,
+                "eta_iso": eta_iso,
                 "eta_sub": eta_sub,
                 "window_size": delta_count,
+                "latest_video_name": str(latest_name),
             })
         except Exception as exc:
             print(f"[web-dashboard] GCS scan error: {exc}", file=sys.stderr)
         
         time.sleep(2.0)
 
+
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MinionsScout — Live Pipeline Center</title>
+  <title>MinionsScout — Live Real-Time Center</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700;800&display=swap');
     
@@ -150,16 +176,16 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     body {
-      font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background-color: #F8F6F0;
       color: #111111;
       min-height: 100vh;
-      padding: 32px 24px;
+      padding: 28px 20px;
       -webkit-font-smoothing: antialiased;
     }
 
     .container {
-      max-width: 1160px;
+      max-width: 1180px;
       margin: 0 auto;
     }
 
@@ -167,21 +193,23 @@ HTML_PAGE = """<!DOCTYPE html>
     .hero-banner {
       background: linear-gradient(135deg, #FFE01B 0%, #F5C518 45%, #E5A800 100%);
       border-radius: 28px;
-      padding: 36px 40px;
+      padding: 32px 36px;
       color: #111111;
-      margin-bottom: 24px;
+      margin-bottom: 22px;
       position: relative;
       overflow: hidden;
       box-shadow: 0 20px 40px rgba(245, 197, 24, 0.35);
       border: 1px solid rgba(0, 0, 0, 0.08);
+      transform: translateZ(0);
+      will-change: transform;
     }
     .hero-banner::after {
       content: '';
       position: absolute;
       top: -50%;
       right: -10%;
-      width: 400px;
-      height: 400px;
+      width: 420px;
+      height: 420px;
       background: radial-gradient(circle, rgba(255, 255, 255, 0.35) 0%, transparent 70%);
       pointer-events: none;
     }
@@ -190,7 +218,9 @@ HTML_PAGE = """<!DOCTYPE html>
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      gap: 12px;
     }
     .logo-group {
       display: flex;
@@ -198,21 +228,33 @@ HTML_PAGE = """<!DOCTYPE html>
       gap: 12px;
     }
     .logo-icon {
-      width: 38px;
-      height: 38px;
+      width: 40px;
+      height: 40px;
       display: flex;
       align-items: center;
       justify-content: center;
+      animation: gentle-spin 12s linear infinite;
     }
+    @keyframes gentle-spin {
+      0% { transform: rotate(0deg); }
+      50% { transform: rotate(8deg); }
+      100% { transform: rotate(0deg); }
+    }
+
     .brand-name {
       font-family: 'Space Grotesk', sans-serif;
-      font-size: 1.6rem;
+      font-size: 1.7rem;
       font-weight: 800;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       color: #111111;
     }
 
+    .status-badge-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
     .hero-tag {
       background: rgba(17, 17, 17, 0.1);
       backdrop-filter: blur(10px);
@@ -223,11 +265,26 @@ HTML_PAGE = """<!DOCTYPE html>
       font-weight: 700;
       letter-spacing: 0.02em;
       color: #111111;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #16A34A;
+      box-shadow: 0 0 8px #16A34A;
+      animation: pulse-glow 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.3); }
     }
 
     .hero-title {
       font-family: 'Space Grotesk', sans-serif;
-      font-size: 2.5rem;
+      font-size: 2.6rem;
       font-weight: 800;
       letter-spacing: -0.03em;
       line-height: 1.1;
@@ -236,8 +293,8 @@ HTML_PAGE = """<!DOCTYPE html>
     }
     .hero-subtitle {
       font-size: 1rem;
-      color: rgba(17, 17, 17, 0.8);
-      max-width: 650px;
+      color: rgba(17, 17, 17, 0.85);
+      max-width: 680px;
       font-weight: 500;
     }
 
@@ -248,10 +305,12 @@ HTML_PAGE = """<!DOCTYPE html>
       border-radius: 24px;
       padding: 24px 26px;
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
-      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      position: relative;
     }
     .editorial-card:hover {
-      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
     }
 
     /* KPI Grid */
@@ -272,7 +331,7 @@ HTML_PAGE = """<!DOCTYPE html>
     .kpi-value {
       font-family: 'Space Grotesk', sans-serif;
       font-size: 2.2rem;
-      font-weight: 700;
+      font-weight: 800;
       letter-spacing: -0.03em;
       color: #111111;
       line-height: 1.1;
@@ -313,21 +372,35 @@ HTML_PAGE = """<!DOCTYPE html>
       border-radius: 9999px;
       background: linear-gradient(90deg, #FFE01B 0%, #F59E0B 100%);
       box-shadow: 0 0 16px rgba(245, 197, 24, 0.6);
-      transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+      will-change: width;
     }
 
-    /* Platform Split */
-    .platform-grid {
+    /* Main Content Layout: Platforms + Live Video Preview */
+    .main-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1.2fr 0.8fr;
       gap: 16px;
       margin-bottom: 20px;
+    }
+    @media (max-width: 900px) {
+      .kpi-grid { grid-template-columns: 1fr 1fr; }
+      .main-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 550px) {
+      .kpi-grid { grid-template-columns: 1fr; }
+    }
+
+    .platform-row {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
     }
     .platform-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
     .platform-title {
       font-family: 'Space Grotesk', sans-serif;
@@ -341,6 +414,38 @@ HTML_PAGE = """<!DOCTYPE html>
       border-radius: 9999px;
       background: rgba(245, 197, 24, 0.25);
       color: #B45309;
+    }
+
+    /* Video Player Preview Card */
+    .video-preview-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #111111;
+      color: #FFFFFF;
+      overflow: hidden;
+      min-height: 280px;
+    }
+    .video-wrapper {
+      position: relative;
+      width: 100%;
+      max-height: 240px;
+      border-radius: 16px;
+      overflow: hidden;
+      background: #000000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+    .video-element {
+      width: 100%;
+      height: 100%;
+      max-height: 240px;
+      object-fit: cover;
+      transform: translateZ(0);
+      will-change: transform;
     }
 
     /* Table Grid */
@@ -396,6 +501,7 @@ HTML_PAGE = """<!DOCTYPE html>
       font-size: 0.8rem;
       font-weight: 500;
       margin-top: 20px;
+      line-height: 1.6;
     }
   </style>
 </head>
@@ -405,7 +511,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="hero-banner">
       <div class="hero-top">
         <div class="logo-group">
-          <!-- Minions Goggle Icon SVG -->
+          <!-- Minions Goggle SVG -->
           <svg class="logo-icon" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
             <circle cx="50" cy="50" r="28" fill="#111111"/>
             <circle cx="50" cy="50" r="20" fill="#FFFFFF"/>
@@ -416,8 +522,14 @@ HTML_PAGE = """<!DOCTYPE html>
           </svg>
           <span class="brand-name">MinionsScout</span>
         </div>
-        <div class="hero-tag">
-          ● 2 WORKERS LIVE (10 THREADS)
+        <div class="status-badge-group">
+          <div class="hero-tag" id="stream-status-badge">
+            <div class="pulse-dot"></div>
+            <span id="stream-status-text">SSE LIVE (300ms)</span>
+          </div>
+          <div class="hero-tag" style="background: rgba(0,0,0,0.15);">
+            🕒 <span id="client-local-clock">--:--:--</span>
+          </div>
         </div>
       </div>
       
@@ -442,9 +554,9 @@ HTML_PAGE = """<!DOCTYPE html>
       </div>
 
       <div class="editorial-card">
-        <div class="kpi-label">EMA Smoothed ETA</div>
+        <div class="kpi-label">Local Time ETA</div>
         <div class="kpi-value yellow" style="font-size: 1.9rem;" id="kpi-eta">--:--</div>
-        <div class="kpi-sub" id="kpi-eta-sub">Calculating...</div>
+        <div class="kpi-sub" id="kpi-eta-sub">Calculating in local timezone...</div>
       </div>
 
       <div class="editorial-card">
@@ -465,40 +577,67 @@ HTML_PAGE = """<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- Platform Cards (FB & IG) -->
-    <div class="platform-grid">
+    <!-- Main Grid: Platforms (Left) + Video Preview (Right) -->
+    <div class="main-grid">
       
-      <div class="editorial-card">
-        <div class="platform-header">
-          <div>
-            <div class="platform-title">Facebook Reels</div>
-            <div style="font-size: 0.8rem; color: #737373; margin-top: 2px;">5 Parallel Concurrency Threads</div>
+      <!-- Platform Cards (FB & IG) -->
+      <div class="platform-row">
+        
+        <div class="editorial-card">
+          <div class="platform-header">
+            <div>
+              <div class="platform-title">Facebook Reels</div>
+              <div style="font-size: 0.8rem; color: #737373; margin-top: 2px;">5 Parallel Concurrency Threads</div>
+            </div>
+            <span class="platform-badge" id="fb-pct-badge">0.0%</span>
           </div>
-          <span class="platform-badge" id="fb-pct-badge">0.0%</span>
+          <div style="font-family: 'Space Grotesk', sans-serif; font-size: 2rem; font-weight: 700; margin-bottom: 2px;" id="fb-count-display">
+            0 <span style="font-size: 1rem; color: #737373; font-weight: 500;">/ 4,578</span>
+          </div>
+          <div style="font-size: 0.85rem; color: #737373; margin-bottom: 14px;" id="fb-remaining">4,578 videos remaining</div>
+          <div class="progress-track" style="background: rgba(17, 17, 17, 0.08); height: 8px;">
+            <div class="progress-fill" id="fb-progress-bar" style="width: 0%; background: #111111;"></div>
+          </div>
         </div>
-        <div style="font-family: 'Space Grotesk', sans-serif; font-size: 2rem; font-weight: 700; margin-bottom: 2px;" id="fb-count-display">
-          0 <span style="font-size: 1rem; color: #737373; font-weight: 500;">/ 4,578</span>
+
+        <div class="editorial-card">
+          <div class="platform-header">
+            <div>
+              <div class="platform-title">Instagram Reels</div>
+              <div style="font-size: 0.8rem; color: #737373; margin-top: 2px;">5 Parallel Concurrency Threads</div>
+            </div>
+            <span class="platform-badge" id="ig-pct-badge">0.0%</span>
+          </div>
+          <div style="font-family: 'Space Grotesk', sans-serif; font-size: 2rem; font-weight: 700; margin-bottom: 2px;" id="ig-count-display">
+            0 <span style="font-size: 1rem; color: #737373; font-weight: 500;">/ 4,875</span>
+          </div>
+          <div style="font-size: 0.85rem; color: #737373; margin-bottom: 14px;" id="ig-remaining">4,875 videos remaining</div>
+          <div class="progress-track" style="background: rgba(17, 17, 17, 0.08); height: 8px;">
+            <div class="progress-fill" id="ig-progress-bar" style="width: 0%; background: linear-gradient(90deg, #FFE01B, #F59E0B);"></div>
+          </div>
         </div>
-        <div style="font-size: 0.85rem; color: #737373; margin-bottom: 14px;" id="fb-remaining">4,578 videos remaining</div>
-        <div class="progress-track" style="background: rgba(17, 17, 17, 0.08); height: 8px;">
-          <div class="progress-fill" id="fb-progress-bar" style="width: 0%; background: #111111;"></div>
-        </div>
+
       </div>
 
-      <div class="editorial-card">
-        <div class="platform-header">
-          <div>
-            <div class="platform-title">Instagram Reels</div>
-            <div style="font-size: 0.8rem; color: #737373; margin-top: 2px;">5 Parallel Concurrency Threads</div>
+      <!-- Live Video Deliverable Preview -->
+      <div class="editorial-card video-preview-card">
+        <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div style="font-family: 'Space Grotesk', sans-serif; font-size: 1rem; font-weight: 700; color: #FFFFFF;">
+            🎬 Live 480p Transcode Stream
           </div>
-          <span class="platform-badge" id="ig-pct-badge">0.0%</span>
+          <span class="tag-pill" style="background: rgba(255,224,27,0.2); color: #FFE01B; font-size: 10px;">
+            H.264 / AAC
+          </span>
         </div>
-        <div style="font-family: 'Space Grotesk', sans-serif; font-size: 2rem; font-weight: 700; margin-bottom: 2px;" id="ig-count-display">
-          0 <span style="font-size: 1rem; color: #737373; font-weight: 500;">/ 4,875</span>
+        <div class="video-wrapper">
+          <video class="video-element" id="live-video-player" autoplay loop muted playsinline preload="auto">
+            <source src="/api/video/latest" type="video/mp4">
+            Your browser does not support the video tag.
+          </video>
         </div>
-        <div style="font-size: 0.85rem; color: #737373; margin-bottom: 14px;" id="ig-remaining">4,875 videos remaining</div>
-        <div class="progress-track" style="background: rgba(17, 17, 17, 0.08); height: 8px;">
-          <div class="progress-fill" id="ig-progress-bar" style="width: 0%; background: linear-gradient(90deg, #FFE01B, #F59E0B);"></div>
+        <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75rem; color: #AAAAAA;">
+          <span id="video-filename" style="font-family: monospace; overflow: hidden; text-overflow: ellipsis; max-width: 180px;">latest_reel.mp4</span>
+          <span style="color: #FFE01B; font-weight: 600;">Hardware Accelerated</span>
         </div>
       </div>
 
@@ -535,7 +674,8 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <div class="footer">
-      MinionsScout • Minions Electric Yellow Edition • Last Ping: <span id="last-ping-time">--:--:--</span>
+      MinionsScout Real-Time Stream Engine • Client Timezone: <b id="client-tz-display">Detecting...</b><br>
+      High-Frequency SSE Push Active • 60 FPS Interpolation • Last Sync: <span id="last-ping-time">--:--:--</span>
     </div>
 
   </div>
@@ -545,65 +685,176 @@ HTML_PAGE = """<!DOCTYPE html>
     const TOTAL_IG = 4875;
     const TOTAL_META = TOTAL_FB + TOTAL_IG;
 
-    async function pollStats() {
-      try {
-        const res = await fetch('/api/stats');
-        if (!res.ok) return;
-        const data = await res.json();
+    // Detect Client Timezone Dynamically
+    const clientTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const userLocale = navigator.language || 'de-DE';
+    document.getElementById('client-tz-display').innerText = clientTz;
 
-        const fb = data.facebook;
-        const ig = data.instagram;
-        const meta = fb + ig;
-        const fbPct = ((fb / TOTAL_FB) * 100).toFixed(1);
-        const igPct = ((ig / TOTAL_IG) * 100).toFixed(1);
-        const metaPct = ((meta / TOTAL_META) * 100).toFixed(1);
+    // Live Local Clock Updater (1s interval)
+    function updateClock() {
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString(userLocale, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      document.getElementById('client-local-clock').innerText = `${timeStr}`;
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
 
-        document.getElementById('kpi-meta-total').innerText = meta.toLocaleString();
-        document.getElementById('kpi-meta-sub').innerText = `${metaPct}% of ${TOTAL_META.toLocaleString()} videos`;
-        document.getElementById('kpi-speed').innerHTML = `${data.vpm.toFixed(1)} <span style="font-size: 1.1rem; font-weight: 500; color: #737373;">/min</span>`;
-        document.getElementById('kpi-speed-hour').innerText = `~${data.vph.toLocaleString()} videos / hour`;
+    // 60FPS Lerp Numeric Display Interpolator
+    const animatedValues = {
+      metaTotal: { current: 0, target: 0 },
+      fbCount: { current: 0, target: 0 },
+      igCount: { current: 0, target: 0 },
+      speed: { current: 0, target: 0 }
+    };
 
-        document.getElementById('kpi-eta').innerText = data.eta_time;
-        document.getElementById('kpi-eta-sub').innerText = data.eta_sub;
+    function lerp(start, end, factor) {
+      return start + (end - start) * factor;
+    }
 
-        document.getElementById('meta-banner-stat').innerText = `${meta.toLocaleString()} / ${TOTAL_META.toLocaleString()} (${metaPct}%)`;
-        document.getElementById('meta-progress-bar').style.width = `${Math.min(100, metaPct)}%`;
-
-        document.getElementById('fb-pct-badge').innerText = `${fbPct}%`;
-        document.getElementById('fb-count-display').innerHTML = `${fb.toLocaleString()} <span style="font-size: 1rem; color: #737373; font-weight: 500;">/ ${TOTAL_FB.toLocaleString()}</span>`;
-        document.getElementById('fb-remaining').innerText = `${(TOTAL_FB - fb).toLocaleString()} videos remaining`;
-        document.getElementById('fb-progress-bar').style.width = `${Math.min(100, fbPct)}%`;
-
-        document.getElementById('ig-pct-badge').innerText = `${igPct}%`;
-        document.getElementById('ig-count-display').innerHTML = `${ig.toLocaleString()} <span style="font-size: 1rem; color: #737373; font-weight: 500;">/ ${TOTAL_IG.toLocaleString()}</span>`;
-        document.getElementById('ig-remaining').innerText = `${(TOTAL_IG - ig).toLocaleString()} videos remaining`;
-        document.getElementById('ig-progress-bar').style.width = `${Math.min(100, igPct)}%`;
-
-        document.getElementById('t-fb-up').innerText = fb.toLocaleString();
-        document.getElementById('t-fb-pct').innerText = `${fbPct}%`;
-        document.getElementById('t-ig-up').innerText = ig.toLocaleString();
-        document.getElementById('t-ig-pct').innerText = `${igPct}%`;
-        document.getElementById('t-tt-up').innerText = data.tiktok.toLocaleString();
-        document.getElementById('t-yt-up').innerText = data.youtube.toLocaleString();
-
-        if (data.recent && data.recent.length > 0) {
-          const tbody = document.getElementById('recent-table-body');
-          tbody.innerHTML = data.recent.map(r => `
-            <tr>
-              <td style="font-family: monospace; font-size: 0.82rem; color: #444444;">${r}</td>
-              <td style="text-align: right;"><span class="tag-pill">480p Ready</span></td>
-            </tr>
-          `).join('');
+    function renderSmoothLoop() {
+      for (const [key, state] of Object.entries(animatedValues)) {
+        if (Math.abs(state.target - state.current) > 0.01) {
+          state.current = lerp(state.current, state.target, 0.12);
+        } else {
+          state.current = state.target;
         }
+      }
 
-        document.getElementById('last-ping-time').innerText = data.last_updated;
-      } catch (err) {
-        console.error('Polling error:', err);
+      document.getElementById('kpi-meta-total').innerText = Math.round(animatedValues.metaTotal.current).toLocaleString();
+      document.getElementById('kpi-speed').innerHTML = `${animatedValues.speed.current.toFixed(1)} <span style="font-size: 1.1rem; font-weight: 500; color: #737373;">/min</span>`;
+      
+      requestAnimationFrame(renderSmoothLoop);
+    }
+    requestAnimationFrame(renderSmoothLoop);
+
+    // Update UI from SSE / Fallback Data
+    function applyState(data) {
+      const fb = data.facebook;
+      const ig = data.instagram;
+      const meta = fb + ig;
+      const fbPct = ((fb / TOTAL_FB) * 100).toFixed(1);
+      const igPct = ((ig / TOTAL_IG) * 100).toFixed(1);
+      const metaPct = ((meta / TOTAL_META) * 100).toFixed(1);
+
+      animatedValues.metaTotal.target = meta;
+      animatedValues.fbCount.target = fb;
+      animatedValues.igCount.target = ig;
+      animatedValues.speed.target = data.vpm;
+
+      document.getElementById('kpi-meta-sub').innerText = `${metaPct}% of ${TOTAL_META.toLocaleString()} videos`;
+      document.getElementById('kpi-speed-hour').innerText = `~${data.vph.toLocaleString()} videos / hour`;
+
+      // Format ETA in Client Local Timezone
+      if (data.eta_seconds > 0 && data.eta_iso) {
+        const etaDate = new Date(data.eta_iso);
+        const etaLocalStr = etaDate.toLocaleTimeString(userLocale, { hour: '2-digit', minute: '2-digit' });
+        document.getElementById('kpi-eta').innerText = etaLocalStr;
+        document.getElementById('kpi-eta-sub').innerText = `${data.eta_sub}`;
+      } else {
+        document.getElementById('kpi-eta').innerText = '--:--';
+        document.getElementById('kpi-eta-sub').innerText = data.eta_sub || 'Sampling downloads...';
+      }
+
+      document.getElementById('meta-banner-stat').innerText = `${meta.toLocaleString()} / ${TOTAL_META.toLocaleString()} (${metaPct}%)`;
+      document.getElementById('meta-progress-bar').style.width = `${Math.min(100, metaPct)}%`;
+
+      document.getElementById('fb-pct-badge').innerText = `${fbPct}%`;
+      document.getElementById('fb-count-display').innerHTML = `${fb.toLocaleString()} <span style="font-size: 1rem; color: #737373; font-weight: 500;">/ ${TOTAL_FB.toLocaleString()}</span>`;
+      document.getElementById('fb-remaining').innerText = `${(TOTAL_FB - fb).toLocaleString()} videos remaining`;
+      document.getElementById('fb-progress-bar').style.width = `${Math.min(100, fbPct)}%`;
+
+      document.getElementById('ig-pct-badge').innerText = `${igPct}%`;
+      document.getElementById('ig-count-display').innerHTML = `${ig.toLocaleString()} <span style="font-size: 1rem; color: #737373; font-weight: 500;">/ ${TOTAL_IG.toLocaleString()}</span>`;
+      document.getElementById('ig-remaining').innerText = `${(TOTAL_IG - ig).toLocaleString()} videos remaining`;
+      document.getElementById('ig-progress-bar').style.width = `${Math.min(100, igPct)}%`;
+
+      document.getElementById('t-fb-up').innerText = fb.toLocaleString();
+      document.getElementById('t-fb-pct').innerText = `${fbPct}%`;
+      document.getElementById('t-ig-up').innerText = ig.toLocaleString();
+      document.getElementById('t-ig-pct').innerText = `${igPct}%`;
+      document.getElementById('t-tt-up').innerText = data.tiktok.toLocaleString();
+      document.getElementById('t-yt-up').innerText = data.youtube.toLocaleString();
+
+      if (data.latest_video_name) {
+        document.getElementById('video-filename').innerText = data.latest_video_name;
+      }
+
+      if (data.recent && data.recent.length > 0) {
+        const tbody = document.getElementById('recent-table-body');
+        tbody.innerHTML = data.recent.map(r => `
+          <tr>
+            <td style="font-family: monospace; font-size: 0.82rem; color: #444444;">${r}</td>
+            <td style="text-align: right;"><span class="tag-pill">480p Ready</span></td>
+          </tr>
+        `).join('');
+      }
+
+      if (data.last_updated_iso) {
+        const lastSync = new Date(data.last_updated_iso).toLocaleTimeString(userLocale, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        document.getElementById('last-ping-time').innerText = lastSync;
       }
     }
 
-    setInterval(pollStats, 1000);
-    pollStats();
+    // Real-Time Server-Sent Events (SSE) Stream with Auto-Reconnect & Fallback
+    let eventSource = null;
+    let fallbackInterval = null;
+
+    function initSSEStream() {
+      if (eventSource) {
+        try { eventSource.close(); } catch(e) {}
+      }
+
+      const statusText = document.getElementById('stream-status-text');
+      const statusBadge = document.getElementById('stream-status-badge');
+
+      try {
+        eventSource = new EventSource('/api/stream');
+
+        eventSource.onopen = function() {
+          statusText.innerText = 'SSE STREAM (250ms)';
+          if (fallbackInterval) {
+            clearInterval(fallbackInterval);
+            fallbackInterval = null;
+          }
+        };
+
+        eventSource.onmessage = function(event) {
+          try {
+            const data = JSON.parse(event.data);
+            applyState(data);
+          } catch(e) {
+            console.error('SSE JSON error:', e);
+          }
+        };
+
+        eventSource.onerror = function(err) {
+          console.warn('SSE disconnected, switching to fallback polling...');
+          statusText.innerText = 'POLLING FALLBACK';
+          eventSource.close();
+          startFallbackPolling();
+          setTimeout(initSSEStream, 5000); // Attempt reconnect in 5s
+        };
+      } catch (err) {
+        startFallbackPolling();
+      }
+    }
+
+    function startFallbackPolling() {
+      if (!fallbackInterval) {
+        fallbackInterval = setInterval(async () => {
+          try {
+            const res = await fetch('/api/stats');
+            if (res.ok) {
+              const data = await res.json();
+              applyState(data);
+            }
+          } catch(e) {}
+        }, 1000);
+      }
+    }
+
+    // Initialize stream immediately
+    initSSEStream();
   </script>
 </body>
 </html>
@@ -614,13 +865,75 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path == "/api/stats":
+        # 1. Server-Sent Events (SSE) Stream Route
+        if self.path == "/api/stream":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            
+            try:
+                while True:
+                    payload = json.dumps(STATE)
+                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                    time.sleep(0.3)  # Push every 300ms
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+
+        # 2. JSON Stats Fallback Route
+        elif self.path == "/api/stats":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(json.dumps(STATE).encode("utf-8"))
+            return
+
+        # 3. Video Streaming Route with Range Request Support
+        elif self.path == "/api/video/latest":
+            vid_path = get_latest_local_video()
+            if not vid_path or not vid_path.exists():
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            file_size = vid_path.stat().st_size
+            range_header = self.headers.get("Range")
+            
+            if range_header:
+                match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+                if match:
+                    start = int(match.group(1))
+                    end = int(match.group(2)) if match.group(2) else file_size - 1
+                    length = end - start + 1
+                    
+                    self.send_response(206)
+                    self.send_header("Content-Type", "video/mp4")
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                    self.send_header("Content-Length", str(length))
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.end_headers()
+                    
+                    with open(vid_path, "rb") as f:
+                        f.seek(start)
+                        self.wfile.write(f.read(length))
+                    return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", str(file_size))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            with open(vid_path, "rb") as f:
+                self.wfile.write(f.read())
+            return
+
+        # 4. Root HTML Page
         else:
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -628,14 +941,18 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(HTML_PAGE.encode("utf-8"))
 
 
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
 def run_server(port: int = 8505):
     t = threading.Thread(target=background_gcs_scanner, daemon=True)
     t.start()
 
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", port), DashboardHandler) as httpd:
-        print(f"\n🍌 MinionsScout Yellow Dashboard running at: http://localhost:{port}\n")
-        httpd.serve_forever()
+    server = ThreadingHTTPServer(("", port), DashboardHandler)
+    print(f"\n🍌 MinionsScout SSE High-End Server running at: http://localhost:{port}\n")
+    server.serve_forever()
 
 
 if __name__ == "__main__":
