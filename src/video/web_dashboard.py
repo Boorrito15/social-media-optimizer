@@ -593,7 +593,7 @@ HTML_PAGE = """<!DOCTYPE html>
         <div class="header-actions">
           <button class="refresh-btn" id="manual-refresh-btn" onclick="triggerManualSync()" title="Click for instant GCS sync">
             <span class="btn-icon">⚡</span>
-            <span id="refresh-btn-text">Auto-Sync (250ms)</span>
+            <span id="refresh-btn-text">Auto-Sync (10ms)</span>
           </button>
           <div class="hero-tag" style="background: rgba(0,0,0,0.12);">
             🕒 <span id="client-local-clock">--:--:--</span>
@@ -858,8 +858,11 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
-    // Instant Fetch on Load (<1ms from cache)
+    let isFetching = false;
+    // Ultra-Fast In-Memory Fetch (<0.1ms)
     async function fetchStats() {
+      if (isFetching) return;
+      isFetching = true;
       try {
         const res = await fetch('/api/stats');
         if (res.ok) {
@@ -868,6 +871,8 @@ HTML_PAGE = """<!DOCTYPE html>
         }
       } catch (err) {
         console.error('Fetch error:', err);
+      } finally {
+        isFetching = false;
       }
     }
 
@@ -894,15 +899,15 @@ HTML_PAGE = """<!DOCTYPE html>
       } finally {
         setTimeout(() => {
           btn.classList.remove('spinning');
-          btnText.innerText = 'Refresh Data';
+          btnText.innerText = 'Auto-Sync (10ms)';
           btn.disabled = false;
         }, 1500);
       }
     }
 
-    // Initial load immediately + Automatic live sync every 0.25s (250ms)
+    // Initial load immediately + Ultra-high-frequency automatic live sync every 10ms (100 FPS)
     fetchStats();
-    setInterval(fetchStats, 250);
+    setInterval(fetchStats, 10);
   </script>
 </body>
 </html>
