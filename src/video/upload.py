@@ -30,8 +30,7 @@ from utils.config import (
     video_gcs_prefix,
     video_output_dir,
 )
-from utils.gcs import list_existing_objects, object_exists, upload_file
-from utils.hashing import sha256_file
+from utils.gcs import list_existing_objects, object_exists, sha256_file, upload_file
 from src.video.download import (
     SUPPORTED_EXTRACTORS,
     MediaResolutionError,
