@@ -15,6 +15,7 @@ ENV/
 data/raw/
 data/processed/*.mp4
 data/processed/*.jpeg
+data/videos/
 *.mp4
 *.m4a
 *.jpeg
@@ -23,8 +24,14 @@ data/processed/*.jpeg
 
 # Environment Variables & Keys
 .env
+.env.*
+!.env.example
+
+# Service account keys / credentials JSON (never commit these)
 *.json
-!config/*.json
+*-service-account.json
+config/*.json
+!config/.gitkeep
 
 # IDE / OS
 .DS_Store
