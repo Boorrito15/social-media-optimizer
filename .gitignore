@@ -11,21 +11,23 @@ venv/
 env/
 ENV/
 
-# Data & Video Binaries (Do not commit raw videos or frames)
+# Data & Video Binaries (Do not commit raw videos, frames, or generated datasets)
 data/raw/
-data/processed/*.mp4
-data/processed/*.jpeg
+data/processed/
 data/videos/
 *.mp4
 *.m4a
 *.jpeg
 *.jpg
 *.png
+*.parquet
 
 # Environment Variables & Keys
 .env
 .env.*
 !.env.example
+cookies.txt
+*.cookies
 
 # Service account keys / credentials JSON (never commit these)
 *.json
