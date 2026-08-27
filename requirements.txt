@@ -5,6 +5,14 @@ pandas
 polars
 pyarrow
 
+# GCS uploads (preferred transport; works with just the service-account key)
+google-cloud-storage
+
+# Video / ML pipeline
+#  NOTE: ffmpeg must also be installed on the host (brew/apt) for the 480p
+#  transcode step. It is used via utils/ffmpeg.py.
+# google-cloud-storage   # optional: alternative to the gsutil CLI for uploads
+
 # ML & NLP
 torch
 google-genai
@@ -18,3 +26,4 @@ plotly
 
 # Dev Tools
 python-dotenv
+pytest
