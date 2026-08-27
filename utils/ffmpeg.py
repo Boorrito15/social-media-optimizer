@@ -81,7 +81,9 @@ def build_480p_profile(
     if threads is None:
         threads = 0
 
-    if codec == "av1":
+    if codec in ("videotoolbox", "h264_videotoolbox", "hw"):
+        vcodec = ["-c:v", "h264_videotoolbox", "-b:v", "1500k", "-allow_sw", "1"]
+    elif codec == "av1":
         vcodec = ["-c:v", "libsvtav1", "-preset", "8", "-crf", str(crf)]
     else:
         vcodec = ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf)]

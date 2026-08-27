@@ -261,3 +261,13 @@ def test_build_ydl_opts_with_browser_cookies():
     assert opts.get("cookiesfrombrowser") == ("chrome",)
     assert "User-Agent" in opts.get("http_headers", {})
 
+
+def test_build_480p_profile_videotoolbox():
+    from utils.ffmpeg import build_480p_profile
+
+    profile = build_480p_profile(codec="videotoolbox")
+    assert "-c:v" in profile
+    idx = profile.index("-c:v")
+    assert profile[idx + 1] == "h264_videotoolbox"
+
+
