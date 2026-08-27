@@ -200,7 +200,7 @@ def do_gcs_sync():
 def relaxed_background_scanner():
     while True:
         do_gcs_sync()
-        time.sleep(60.0)  # Relaxed 60s background sync
+        time.sleep(1.5)  # Continuous fast 1.5s background GCS sync
 
 
 HTML_PAGE = """<!DOCTYPE html>
@@ -591,9 +591,9 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
         
         <div class="header-actions">
-          <button class="refresh-btn" id="manual-refresh-btn" onclick="triggerManualSync()">
+          <button class="refresh-btn" id="manual-refresh-btn" onclick="triggerManualSync()" title="Click for instant GCS sync">
             <span class="btn-icon">⚡</span>
-            <span id="refresh-btn-text">Refresh Data</span>
+            <span id="refresh-btn-text">Auto-Sync (250ms)</span>
           </button>
           <div class="hero-tag" style="background: rgba(0,0,0,0.12);">
             🕒 <span id="client-local-clock">--:--:--</span>
@@ -900,8 +900,9 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
-    // Initial load immediately
+    // Initial load immediately + Automatic live sync every 0.25s (250ms)
     fetchStats();
+    setInterval(fetchStats, 250);
   </script>
 </body>
 </html>
