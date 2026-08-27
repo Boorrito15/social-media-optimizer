@@ -62,7 +62,8 @@ def media_id_from_url(url: str, platform: str | None = None) -> str:
             r"youtu\.be/([A-Za-z0-9_-]{6,})", url
         )
         if m:
-            return m.group(1)
+            return m.group(1) if m else url.rsplit("/", 1)[-1].split("?")[0]
+    # TikTok & IG: last non-empty path segment.
     segs = [s for s in url.rstrip("/").split("/") if s]
     return segs[-1] if segs else url
 
