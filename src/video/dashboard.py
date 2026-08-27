@@ -12,15 +12,12 @@ from utils.config import gcs_processed_bucket
 from utils.gcs import list_existing_objects
 
 st.set_page_config(
-    page_title="DRAGONFRUIT — Pipeline Center",
+    page_title="MinionsScout — Pipeline Center",
     page_icon="🔥",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# -----------------------------------------------------------------------------
-# Dragonfruit Editorial Design System CSS
-# -----------------------------------------------------------------------------
 st.markdown(
     """
 <style>
@@ -39,7 +36,6 @@ st.markdown(
     header[data-testid="stHeader"] { background: transparent; }
     .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1180px; }
 
-    /* Dragonfruit Hero Banner */
     .hero-banner {
         background: linear-gradient(135deg, #E02424 0%, #B91C1C 40%, #7F1D1D 100%);
         border-radius: 24px;
@@ -58,7 +54,6 @@ st.markdown(
         margin-bottom: 6px;
     }
 
-    /* Editorial White Card */
     .editorial-card {
         background: #FFFFFF;
         border: 1px solid rgba(17, 17, 17, 0.08);
@@ -157,7 +152,11 @@ TOTAL_TARGETS = {
 bucket = gcs_processed_bucket()
 
 if "history" not in st.session_state:
-    st.session_state["history"] = deque(maxlen=200)
+    st.session_state["history"] = deque(maxlen=300)
+if "smooth_vpm" not in st.session_state:
+    st.session_state["smooth_vpm"] = None
+if "smooth_seconds_left" not in st.session_state:
+    st.session_state["smooth_seconds_left"] = None
 
 @st.cache_data(ttl=2)
 def fetch_data():
@@ -187,35 +186,57 @@ ig_count = counts["instagram"]
 ig_pct = (ig_count / TOTAL_TARGETS["instagram"]) * 100
 ig_rem = TOTAL_TARGETS["instagram"] - ig_count
 
+# Record history point
 hist = st.session_state["history"]
-if not hist or hist[-1][1] != current_meta:
-    hist.append((now, current_meta))
+hist.append((now, current_meta))
 
-target_window = 30
+# EMA smoothing calculation over last 3 minutes / 30 downloads
+lookback_sec = 180.0
+min_downloads = 25
+
 ref_time, ref_count = hist[0]
-for t_hist, c_hist in reversed(hist):
-    if (current_meta - c_hist) >= target_window:
+for t_hist, c_hist in hist:
+    if (now - t_hist) <= lookback_sec and (current_meta - c_hist) >= min_downloads:
         ref_time, ref_count = t_hist, c_hist
         break
 
 delta_count = current_meta - ref_count
 delta_time = max(1.0, now - ref_time)
 
-if delta_count > 0 and delta_time > 1.0:
-    vps = delta_count / delta_time
-    vpm = vps * 60.0
-    vph = int(vps * 3600.0)
-    seconds_left = meta_remaining / vps
-    eta_dt = datetime.now() + timedelta(seconds=seconds_left)
-    hours = int(seconds_left // 3600)
-    minutes = int((seconds_left % 3600) // 60)
+if delta_count > 0 and delta_time > 5.0:
+    raw_vps = delta_count / delta_time
+    raw_vpm = raw_vps * 60.0
+    
+    alpha = 0.15
+    if st.session_state["smooth_vpm"] is None:
+        st.session_state["smooth_vpm"] = raw_vpm
+    else:
+        st.session_state["smooth_vpm"] = (alpha * raw_vpm) + ((1.0 - alpha) * st.session_state["smooth_vpm"])
+    
+    smooth_vpm = st.session_state["smooth_vpm"]
+    smooth_vps = max(0.01, smooth_vpm / 60.0)
+    raw_seconds_left = meta_remaining / smooth_vps
+    
+    if st.session_state["smooth_seconds_left"] is None:
+        st.session_state["smooth_seconds_left"] = raw_seconds_left
+    else:
+        st.session_state["smooth_seconds_left"] = (0.10 * raw_seconds_left) + (0.90 * st.session_state["smooth_seconds_left"])
+    
+    smooth_seconds = st.session_state["smooth_seconds_left"]
+    eta_dt = datetime.now() + timedelta(seconds=smooth_seconds)
+    
+    hours = int(smooth_seconds // 3600)
+    minutes = int((smooth_seconds % 3600) // 60)
+    
     eta_val = eta_dt.strftime("%H:%M")
-    eta_cap = f"in ~{hours}h {minutes}m (last {delta_count} vids)"
+    eta_cap = f"in ~{hours}h {minutes}m (EMA stabilized)"
+    vpm_val = round(smooth_vpm, 1)
+    vph_val = int(smooth_vpm * 60.0)
 else:
-    vpm = 0.0
-    vph = 0
+    vpm_val = 0.0
+    vph_val = 0
     eta_val = "--:--"
-    eta_cap = "Calibrating speed..."
+    eta_cap = "Sampling downloads..."
 
 # -----------------------------------------------------------------------------
 # Hero Banner
@@ -226,7 +247,7 @@ st.markdown(
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
         <div style="display: flex; align-items: center; gap: 10px;">
             <span style="font-size: 22px;">❋</span>
-            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;">DRAGONFRUIT</span>
+            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;">MinionsScout</span>
         </div>
         <span style="background: rgba(255,255,255,0.2); padding: 5px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em;">
             ● 2 WORKERS LIVE (10 THREADS)
@@ -234,7 +255,7 @@ st.markdown(
     </div>
     <div class="hero-title">Make an impact.</div>
     <div style="font-size: 14px; opacity: 0.9;">
-        Automated short-form video scraping, 480p H.264 transcode & GCS persistence on <code style="background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; color: #fff;">meta_layer_scr</code>
+        Short-form video scraping, 480p H.264 transcode & GCS persistence on <code style="background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; color: #fff;">meta_layer_scr</code>
     </div>
 </div>
 """,
@@ -262,9 +283,9 @@ with c2:
     st.markdown(
         f"""
     <div class="editorial-card">
-        <div class="subhead">Current Speed</div>
-        <div class="metric-value">{vpm:.1f} <span style="font-size: 18px; font-weight: 500; color: #737373;">/min</span></div>
-        <div class="metric-caption">~{vph:,} videos / hour</div>
+        <div class="subhead">Stabilized Speed</div>
+        <div class="metric-value">{vpm_val:.1f} <span style="font-size: 18px; font-weight: 500; color: #737373;">/min</span></div>
+        <div class="metric-caption">~{vph_val:,} videos / hour</div>
     </div>
     """,
         unsafe_allow_html=True,
@@ -274,7 +295,7 @@ with c3:
     st.markdown(
         f"""
     <div class="editorial-card">
-        <div class="subhead">ETA (Last 30 Vids)</div>
+        <div class="subhead">EMA Smoothed ETA</div>
         <div class="metric-value crimson">{eta_val}</div>
         <div class="metric-caption">{eta_cap}</div>
     </div>
@@ -450,7 +471,7 @@ with t_col2:
 st.markdown(
     f"""
 <div style="text-align: center; font-size: 11px; color: #888888; margin-top: 20px; font-weight: 500;">
-    DRAGONFRUIT Brand System • Rolling 30-Download ETA Algorithm • Last Ping: {datetime.now().strftime('%H:%M:%S')}
+    MinionsScout • Exponential Moving Average (EMA) Stabilized Speed & ETA • Last Ping: {datetime.now().strftime('%H:%M:%S')}
 </div>
 """,
     unsafe_allow_html=True,

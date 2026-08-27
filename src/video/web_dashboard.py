@@ -1,10 +1,9 @@
-"""Real-Time Zero-Flicker MinionsScout Editorial Live Dashboard.
+"""Real-Time Zero-Flicker MinionsScout Editorial Live Dashboard with EMA Smoothing.
 
 Brand Identity:
 - Name: MinionsScout
 - Theme: Editorial Cream (#FAF8F5 / #F4F1EA), Obsidian (#111111), Dragonfruit Crimson (#E02424, #FF3B30, #991B1B)
-- Bold Grotesque Typography with heavy numerical KPI displays
-- Real-time 30-download rolling window ETA algorithm (zero reload, zero dimming)
+- Ultra-smooth Exponential Moving Average (EMA) stabilized Speed & ETA backend
 """
 
 from collections import deque
@@ -46,11 +45,13 @@ STATE = {
     "window_size": 0,
 }
 
-HISTORY = deque(maxlen=300)
+HISTORY = deque(maxlen=500)
+SMOOTH_VPM = None
+SMOOTH_SECONDS_LEFT = None
 
 
 def background_gcs_scanner():
-    global STATE, HISTORY
+    global STATE, HISTORY, SMOOTH_VPM, SMOOTH_SECONDS_LEFT
     
     while True:
         try:
@@ -65,14 +66,16 @@ def background_gcs_scanner():
             current_meta = fb + ig
             now = time.time()
             
-            if not HISTORY or HISTORY[-1][1] != current_meta:
-                HISTORY.append((now, current_meta))
+            # Record every scan timestamp and count
+            HISTORY.append((now, current_meta))
             
-            target_lookback_downloads = 30
+            # Look back across the last 60-180 seconds or last 40 downloads for a robust baseline
+            lookback_seconds = 180.0
+            min_downloads = 25
+            
             ref_time, ref_count = HISTORY[0]
-            
-            for t_hist, c_hist in reversed(HISTORY):
-                if (current_meta - c_hist) >= target_lookback_downloads:
+            for t_hist, c_hist in HISTORY:
+                if (now - t_hist) <= lookback_seconds and (current_meta - c_hist) >= min_downloads:
                     ref_time, ref_count = t_hist, c_hist
                     break
             
@@ -82,22 +85,37 @@ def background_gcs_scanner():
             target_meta = TOTAL_TARGETS["facebook"] + TOTAL_TARGETS["instagram"]
             meta_remaining = max(0, target_meta - current_meta)
             
-            if delta_count > 0 and delta_time > 1.0:
-                vps = delta_count / delta_time
-                vpm = vps * 60.0
-                vph = int(vps * 3600.0)
+            if delta_count > 0 and delta_time > 5.0:
+                raw_vps = delta_count / delta_time
+                raw_vpm = raw_vps * 60.0
                 
-                seconds_left = meta_remaining / vps
-                eta_dt = datetime.now() + timedelta(seconds=seconds_left)
+                # Exponential Moving Average (EMA) smoothing filter (alpha = 0.15)
+                alpha = 0.15
+                if SMOOTH_VPM is None:
+                    SMOOTH_VPM = raw_vpm
+                else:
+                    SMOOTH_VPM = (alpha * raw_vpm) + ((1.0 - alpha) * SMOOTH_VPM)
                 
-                hours = int(seconds_left // 3600)
-                minutes = int((seconds_left % 3600) // 60)
+                smooth_vps = max(0.01, SMOOTH_VPM / 60.0)
+                raw_seconds_left = meta_remaining / smooth_vps
+                
+                if SMOOTH_SECONDS_LEFT is None:
+                    SMOOTH_SECONDS_LEFT = raw_seconds_left
+                else:
+                    SMOOTH_SECONDS_LEFT = (0.10 * raw_seconds_left) + (0.90 * SMOOTH_SECONDS_LEFT)
+                
+                eta_dt = datetime.now() + timedelta(seconds=SMOOTH_SECONDS_LEFT)
+                
+                hours = int(SMOOTH_SECONDS_LEFT // 3600)
+                minutes = int((SMOOTH_SECONDS_LEFT % 3600) // 60)
                 
                 eta_time = eta_dt.strftime("%H:%M")
-                eta_sub = f"in ~{hours}h {minutes}m (last {delta_count} vids)"
+                eta_sub = f"in ~{hours}h {minutes}m (EMA stabilized)"
+                vpm_display = round(SMOOTH_VPM, 1)
+                vph_display = int(SMOOTH_VPM * 60.0)
             else:
-                vpm = 0.0
-                vph = 0
+                vpm_display = 0.0
+                vph_display = 0
                 eta_time = "--:--"
                 eta_sub = "Sampling downloads..."
             
@@ -108,8 +126,8 @@ def background_gcs_scanner():
                 "youtube": yt,
                 "recent": recent,
                 "last_updated": datetime.now().strftime("%H:%M:%S"),
-                "vpm": round(vpm, 1),
-                "vph": vph,
+                "vpm": vpm_display,
+                "vph": vph_display,
                 "eta_time": eta_time,
                 "eta_sub": eta_sub,
                 "window_size": delta_count,
@@ -148,7 +166,6 @@ HTML_PAGE = """<!DOCTYPE html>
       margin: 0 auto;
     }
 
-    /* MinionsScout Hero Banner */
     .hero-banner {
       background: linear-gradient(135deg, #E02424 0%, #B91C1C 40%, #7F1D1D 100%);
       border-radius: 28px;
@@ -221,7 +238,6 @@ HTML_PAGE = """<!DOCTYPE html>
       max-width: 650px;
     }
 
-    /* Editorial Card System */
     .editorial-card {
       background: #FFFFFF;
       border: 1px solid rgba(17, 17, 17, 0.08);
@@ -234,7 +250,6 @@ HTML_PAGE = """<!DOCTYPE html>
       box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
     }
 
-    /* KPI Grid */
     .kpi-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -267,7 +282,6 @@ HTML_PAGE = """<!DOCTYPE html>
       font-weight: 500;
     }
 
-    /* Progress Banner */
     .progress-banner {
       margin-bottom: 20px;
       background: #111111;
@@ -296,7 +310,6 @@ HTML_PAGE = """<!DOCTYPE html>
       transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    /* Platform Split */
     .platform-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -323,7 +336,6 @@ HTML_PAGE = """<!DOCTYPE html>
       color: #E02424;
     }
 
-    /* Table Grid */
     .table-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -418,13 +430,13 @@ HTML_PAGE = """<!DOCTYPE html>
       </div>
 
       <div class="editorial-card">
-        <div class="kpi-label">Current Speed</div>
+        <div class="kpi-label">Stabilized Speed</div>
         <div class="kpi-value" id="kpi-speed">0.0 <span style="font-size: 1.1rem; font-weight: 500; color: #737373;">/min</span></div>
         <div class="kpi-sub" id="kpi-speed-hour">~0 videos / hour</div>
       </div>
 
       <div class="editorial-card">
-        <div class="kpi-label">ETA (Last 30 Vids)</div>
+        <div class="kpi-label">EMA Smoothed ETA</div>
         <div class="kpi-value crimson" style="font-size: 1.9rem;" id="kpi-eta">--:--</div>
         <div class="kpi-sub" id="kpi-eta-sub">Calculating...</div>
       </div>
@@ -517,7 +529,7 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <div class="footer">
-      MinionsScout Brand System • Ultra-responsive Rolling 30-Download ETA • Last Ping: <span id="last-ping-time">--:--:--</span>
+      MinionsScout • Exponential Moving Average (EMA) Stabilized Speed & ETA • Last Ping: <span id="last-ping-time">--:--:--</span>
     </div>
 
   </div>
