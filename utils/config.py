@@ -136,8 +136,7 @@ def service_account_credentials() -> Path | None:
         p = Path(env_value).expanduser()
         if not p.is_absolute():
             p = PROJECT_ROOT / p
-        if p.is_file():
-            return p
+        return p
 
     # 2) Fall back to the ambient environment variable.
     raw = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
