@@ -51,20 +51,19 @@ def test_gcs_object_name():
 # --- resolve marks unsupported platforms (no network) -----------------------
 
 def test_resolve_unsupported_platform_in_pipeline():
-    # Calling download.resolve on IG should not hit the network; it returns a
-    # tombstone with supported=False.
-    m = resolve("https://www.instagram.com/reel/DJPodLgBQm8/")
+    # Calling download.resolve on unsupported platform returns a tombstone with supported=False.
+    m = resolve("https://vimeo.com/123456789", platform="vimeo")
     assert m.supported is False
-    assert m.platform == "instagram"
+    assert m.platform == "vimeo"
 
 
 # --- _process_one (returns a record dict) -----------------------------------
 
 def test_process_one_unsupported_in_dry_run():
-    row = {"url": "https://www.facebook.com/reel/123/", "platform": "FB"}
+    row = {"url": "https://vimeo.com/123456789", "platform": "vimeo"}
     rec = _process_one(row, bucket="b", dry_run=True)
     assert rec["status"] == "unsupported"
-    assert rec["error"] == "no automated extractor for facebook"
+    assert rec["error"] == "no automated extractor for vimeo"
 
 
 def test_process_one_youtube_dry_run_status_uploaded():
@@ -73,6 +72,22 @@ def test_process_one_youtube_dry_run_status_uploaded():
     assert rec["status"] == "uploaded"
     assert rec["post_id"] == "abcXYZ123"
     assert rec["gcs_path"] == "gs://b/videos/youtube/abcXYZ123.mp4"
+
+
+def test_process_one_instagram_dry_run_status_uploaded():
+    row = {"url": "https://www.instagram.com/reel/DJPodLgBQm8/", "platform": "IG"}
+    rec = _process_one(row, bucket="b", dry_run=True)
+    assert rec["status"] == "uploaded"
+    assert rec["post_id"] == "DJPodLgBQm8"
+    assert rec["gcs_path"] == "gs://b/videos/instagram/DJPodLgBQm8.mp4"
+
+
+def test_process_one_facebook_dry_run_status_uploaded():
+    row = {"url": "https://www.facebook.com/reel/729678446160620/", "platform": "FB"}
+    rec = _process_one(row, bucket="b", dry_run=True)
+    assert rec["status"] == "uploaded"
+    assert rec["post_id"] == "729678446160620"
+    assert rec["gcs_path"] == "gs://b/videos/facebook/729678446160620.mp4"
 
 
 def test_process_one_missing_url_status_skipped():
@@ -106,14 +121,15 @@ def test_run_pipeline_dry_run_aggregates():
                 "https://www.youtube.com/watch?v=aaa111",
                 "https://www.instagram.com/reel/x1/",
                 "https://www.facebook.com/reel/9/",
+                "https://vimeo.com/123/",
             ],
-            "platform": ["YT", "IG", "FB"],
+            "platform": ["YT", "IG", "FB", "vimeo"],
         }
     )
     res = run_pipeline(df, dry_run=True)
-    assert res.attempted == 3
-    assert res.uploaded == 1          # youtube dry-run counts as uploaded
-    assert res.unsupported == 2        # IG + FB
+    assert res.attempted == 4
+    assert res.uploaded == 3          # YT + IG + FB dry-run count as uploaded
+    assert res.unsupported == 1        # vimeo
     assert res.failed == 0
 
 
