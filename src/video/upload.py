@@ -123,6 +123,8 @@ def _process_one(
     out_dir: str | Path | None = None,
     ffmpeg_threads: int = 0,
     existing_objects: set[str] | None = None,
+    cookies: str | None = None,
+    cookies_from_browser: str | None = None,
 ) -> dict:
     """Process a single post row, returning a manifest record dict."""
     url = row.get("url")
@@ -172,7 +174,12 @@ def _process_one(
 
     # --- resolve ---
     try:
-        media: ResolvedMedia = resolve(url, platform=platform_name)
+        media: ResolvedMedia = resolve(
+            url,
+            platform=platform_name,
+            cookies=cookies,
+            cookies_from_browser=cookies_from_browser,
+        )
     except MediaResolutionError as exc:
         rec["status"] = "failed"
         rec["error"] = f"resolve: {exc}"
@@ -187,7 +194,19 @@ def _process_one(
     rec["source_resolution"] = str(res) if res is not None else None
 
     # --- download ---
-    local = download(media, out_dir=out_dir)
+    try:
+        local = download(
+            media,
+            out_dir=out_dir,
+            cookies=cookies,
+            cookies_from_browser=cookies_from_browser,
+        )
+    except Exception as exc:
+        rec["status"] = "failed"
+        rec["error"] = f"download: {exc}"
+        print(f"[video] download failed [{platform_code}] {post_id}: {exc}")
+        return rec
+
     if local is None:
         rec["status"] = "failed"
         rec["error"] = "download produced no file"
@@ -287,6 +306,8 @@ def run_pipeline(
     run_id: str | None = None,
     index_flush_every: int = 20,
     skip_existing: bool = True,
+    cookies: str | None = None,
+    cookies_from_browser: str | None = None,
 ) -> VideoJobResult:
     """Run the pipeline over a cleaned posts dataframe and aggregate results.
 
@@ -405,6 +426,8 @@ def run_pipeline(
                 transcode=transcode_to_480p_enabled,
                 ffmpeg_threads=ffmpeg_threads,
                 existing_objects=existing_objects,
+                cookies=cookies,
+                cookies_from_browser=cookies_from_browser,
             ))
     else:
         with ThreadPoolExecutor(max_workers=concurrency) as ex:
@@ -412,7 +435,9 @@ def run_pipeline(
                 ex.submit(_process_one, row, bucket=bucket, dry_run=dry_run,
                           transcode=transcode_to_480p_enabled,
                           ffmpeg_threads=ffmpeg_threads,
-                          existing_objects=existing_objects)
+                          existing_objects=existing_objects,
+                          cookies=cookies,
+                          cookies_from_browser=cookies_from_browser)
                 for row in rows
             ]
             # Collect results linearly so record ordering + summary stay simple.
