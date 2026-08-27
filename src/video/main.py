@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from utils.config import gcs_processed_bucket, video_concurrency  # noqa: E402
+from utils.config import gcs_processed_bucket, service_account_credentials, video_concurrency  # noqa: E402
 from src.video.upload import load_posts, run_pipeline  # noqa: E402
 
 
@@ -84,6 +84,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path to a log file to upload to GCS as logs/<run_id>.log.",
     )
     parser.add_argument(
+        "--no-skip-existing",
+        action="store_true",
+        help="Do not skip videos that already exist in GCS.",
+    )
+    parser.add_argument(
         "--consolidate",
         action="store_true",
         help="After the run, merge all index shards into videos_index.parquet.",
@@ -93,6 +98,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+
+    if not args.dry_run:
+        creds_path = service_account_credentials()
+        if creds_path is None or not creds_path.is_file():
+            print(
+                f"\n[ERROR] Service account key file not found: {creds_path}\n"
+                f"Please place your GCP service account JSON key in '{creds_path or 'config/le-wagon-2303-service-account.json'}'\n"
+                f"or update GOOGLE_APPLICATION_CREDENTIALS in your .env file.\n"
+            )
+            return 1
 
     df = load_posts(args.data)
     platforms = [p.strip() for p in args.platforms.split(",")] if args.platforms else None
@@ -113,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         platforms=platforms,
         concurrency=args.concurrency,
         run_id=args.run_id,
+        skip_existing=not args.no_skip_existing,
     )
     print("\n" + str(result))
 

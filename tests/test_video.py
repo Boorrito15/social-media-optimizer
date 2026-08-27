@@ -186,3 +186,55 @@ def test_write_records_failure_filtering_logic():
     assert len(failed) == 1
     assert list(failed["error"]) == ["upload boom"]
     assert list(failed["gcs_path"]) == ["gs://b/y.mp4"]
+
+
+def test_run_pipeline_direct_skips_existing_objects(monkeypatch):
+    from src.video import upload as up_mod
+
+    existing = {"videos/youtube/already_done.mp4"}
+    monkeypatch.setattr(up_mod, "list_existing_objects", lambda *a, **k: existing)
+    monkeypatch.setattr(up_mod, "write_records_to_gcs", lambda *a, **k: (None, None))
+    monkeypatch.setattr(up_mod, "append_index_shard", lambda *a, **k: None)
+    monkeypatch.setattr(up_mod, "append_failed_sheet", lambda *a, **k: None)
+
+    processed_posts = []
+
+    def mock_process_one(row, **kwargs):
+        processed_posts.append(row["url"])
+        return {
+            "platform": "youtube",
+            "post_id": "new_video",
+            "url": row["url"],
+            "status": "uploaded",
+            "gcs_path": "gs://b/videos/youtube/new_video.mp4",
+            "published_at": None,
+            "duration_s": None,
+            "title": None,
+            "sha256": None,
+            "size_bytes": None,
+            "source_codec": None,
+            "source_resolution": None,
+            "error": None,
+            "processed_at": None,
+            "transcode_args": None,
+        }
+
+    monkeypatch.setattr(up_mod, "_process_one", mock_process_one)
+
+    df = pd.DataFrame(
+        {
+            "url": [
+                "https://www.youtube.com/watch?v=already_done",
+                "https://www.youtube.com/watch?v=new_video",
+            ],
+            "platform": ["YT", "YT"],
+        }
+    )
+
+    res = up_mod.run_pipeline(df, dry_run=False, skip_existing=True)
+    assert res.skipped_existing == 1
+    assert res.uploaded == 1
+    assert res.attempted == 2
+    # Only the new video should have been sent to _process_one
+    assert processed_posts == ["https://www.youtube.com/watch?v=new_video"]
+
