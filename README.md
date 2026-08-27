@@ -165,6 +165,59 @@ python -m src.video.main --consolidate
 Videos and all artifacts land in **GCS, not the local machine** — the local
 disk is only a transient staging area (`data/videos/`, git-ignored).
 
+## Running a scrape (for teammates)
+
+Each machine scrapes to GCS from its **own IP**. The pipeline is **idempotent**:
+before downloading each post it first checks GCS (`videos/<platform>/<post_id>.mp4`)
+and skips anything already there, so multiple machines can work the same shared
+run without duplicating uploads — GCS is the source of truth.
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/Boorrito15/social-media-optimizer.git
+cd social-media-optimizer
+```
+
+### 2. Things you must receive manually (git-ignored, not in the clone)
+
+| File | Where to put it | Purpose |
+| ---- | --------------- | ------- |
+| **GCS service-account key** (`le-wagon-...-service-account.json`) | `config/` | Credentials that let you write to the GCS buckets |
+| **`.env`** | repo root | Bucket names, credentials path, concurrency/delay settings |
+
+These are never committed to git for security. Once you have them, the repo
+config in `.env.example` is a reference only.
+
+### 3. Setup once
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+# install ffmpeg (e.g. brew install ffmpeg on macOS, apt install ffmpeg on Debian)
+```
+
+### 4. Scrape
+
+```bash
+# YouTube (friend A) — serial; YouTube throttles anonymous parallel downloads
+python -m src.video.main --platforms youtube --concurrency 1
+
+# TikTok (friend B) — parallel works fine here
+python -m src.video.main --platforms tiktok --concurrency 3
+
+# Dry-run / limit / verify config first
+python -m src.video.main --platforms tiktok --limit 20 --dry-run
+```
+
+Optional flags: `--run-id <id>` (names index shards + logs),
+`--log <file>` (also upload stdout log to `gs://.../logs/<run_id>.log`),
+`--consolidate` (rebuild the cumulative `videos_index.parquet` at the end).
+
+Videos land at `gs://sm-optimizer-processed/videos/<platform>/<post_id>.mp4`.
+Provenance + failures accumulate in `gs://sm-optimizer-processed/manifests/`
+(index shards + `videos_index.parquet`). IG/FB are stubbed (need login/browser).
+
 ## Tests
 
 ```bash
