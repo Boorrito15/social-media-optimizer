@@ -1,8 +1,8 @@
-"""Real-Time Zero-Flicker MinionsScout Editorial Live Dashboard with EMA Smoothing.
+"""Real-Time Zero-Flicker MinionsScout Yellow Live Dashboard with EMA Smoothing.
 
 Brand Identity:
 - Name: MinionsScout
-- Theme: Editorial Cream (#FAF8F5 / #F4F1EA), Obsidian (#111111), Dragonfruit Crimson (#E02424, #FF3B30, #991B1B)
+- Theme: Minions Electric Yellow (#FFE01B / #F5C518), Obsidian (#111111), Denim Blue (#1E3A8A)
 - Ultra-smooth Exponential Moving Average (EMA) stabilized Speed & ETA backend
 """
 
@@ -66,10 +66,8 @@ def background_gcs_scanner():
             current_meta = fb + ig
             now = time.time()
             
-            # Record every scan timestamp and count
             HISTORY.append((now, current_meta))
             
-            # Look back across the last 60-180 seconds or last 40 downloads for a robust baseline
             lookback_seconds = 180.0
             min_downloads = 25
             
@@ -89,7 +87,6 @@ def background_gcs_scanner():
                 raw_vps = delta_count / delta_time
                 raw_vpm = raw_vps * 60.0
                 
-                # Exponential Moving Average (EMA) smoothing filter (alpha = 0.15)
                 alpha = 0.15
                 if SMOOTH_VPM is None:
                     SMOOTH_VPM = raw_vpm
@@ -144,7 +141,7 @@ HTML_PAGE = """<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MinionsScout — Live Pipeline Center</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700;800&display=swap');
     
     * {
       box-sizing: border-box;
@@ -154,7 +151,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
     body {
       font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
-      background-color: #F7F5F0;
+      background-color: #F8F6F0;
       color: #111111;
       min-height: 100vh;
       padding: 32px 24px;
@@ -166,15 +163,17 @@ HTML_PAGE = """<!DOCTYPE html>
       margin: 0 auto;
     }
 
+    /* Minions Electric Yellow Hero Banner */
     .hero-banner {
-      background: linear-gradient(135deg, #E02424 0%, #B91C1C 40%, #7F1D1D 100%);
+      background: linear-gradient(135deg, #FFE01B 0%, #F5C518 45%, #E5A800 100%);
       border-radius: 28px;
       padding: 36px 40px;
-      color: #FFFFFF;
+      color: #111111;
       margin-bottom: 24px;
       position: relative;
       overflow: hidden;
-      box-shadow: 0 20px 40px rgba(224, 36, 36, 0.25);
+      box-shadow: 0 20px 40px rgba(245, 197, 24, 0.35);
+      border: 1px solid rgba(0, 0, 0, 0.08);
     }
     .hero-banner::after {
       content: '';
@@ -183,7 +182,7 @@ HTML_PAGE = """<!DOCTYPE html>
       right: -10%;
       width: 400px;
       height: 400px;
-      background: radial-gradient(circle, rgba(255, 255, 255, 0.2) 0%, transparent 70%);
+      background: radial-gradient(circle, rgba(255, 255, 255, 0.35) 0%, transparent 70%);
       pointer-events: none;
     }
 
@@ -208,36 +207,41 @@ HTML_PAGE = """<!DOCTYPE html>
     .brand-name {
       font-family: 'Space Grotesk', sans-serif;
       font-size: 1.6rem;
-      font-weight: 700;
+      font-weight: 800;
       letter-spacing: 0.04em;
       text-transform: uppercase;
+      color: #111111;
     }
 
     .hero-tag {
-      background: rgba(255, 255, 255, 0.2);
+      background: rgba(17, 17, 17, 0.1);
       backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.3);
+      border: 1px solid rgba(17, 17, 17, 0.15);
       padding: 6px 14px;
       border-radius: 9999px;
       font-size: 0.8rem;
-      font-weight: 600;
+      font-weight: 700;
       letter-spacing: 0.02em;
+      color: #111111;
     }
 
     .hero-title {
       font-family: 'Space Grotesk', sans-serif;
       font-size: 2.5rem;
-      font-weight: 700;
+      font-weight: 800;
       letter-spacing: -0.03em;
       line-height: 1.1;
       margin-bottom: 8px;
+      color: #111111;
     }
     .hero-subtitle {
       font-size: 1rem;
-      color: rgba(255, 255, 255, 0.85);
+      color: rgba(17, 17, 17, 0.8);
       max-width: 650px;
+      font-weight: 500;
     }
 
+    /* Editorial Card System */
     .editorial-card {
       background: #FFFFFF;
       border: 1px solid rgba(17, 17, 17, 0.08);
@@ -250,6 +254,7 @@ HTML_PAGE = """<!DOCTYPE html>
       box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
     }
 
+    /* KPI Grid */
     .kpi-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -272,8 +277,8 @@ HTML_PAGE = """<!DOCTYPE html>
       color: #111111;
       line-height: 1.1;
     }
-    .kpi-value.crimson {
-      color: #E02424;
+    .kpi-value.yellow {
+      color: #D97706;
     }
     .kpi-sub {
       font-size: 0.82rem;
@@ -282,6 +287,7 @@ HTML_PAGE = """<!DOCTYPE html>
       font-weight: 500;
     }
 
+    /* Progress Banner */
     .progress-banner {
       margin-bottom: 20px;
       background: #111111;
@@ -305,11 +311,12 @@ HTML_PAGE = """<!DOCTYPE html>
     .progress-fill {
       height: 100%;
       border-radius: 9999px;
-      background: linear-gradient(90deg, #E02424 0%, #FF5A5F 100%);
-      box-shadow: 0 0 16px rgba(224, 36, 36, 0.6);
+      background: linear-gradient(90deg, #FFE01B 0%, #F59E0B 100%);
+      box-shadow: 0 0 16px rgba(245, 197, 24, 0.6);
       transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
+    /* Platform Split */
     .platform-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -332,10 +339,11 @@ HTML_PAGE = """<!DOCTYPE html>
       font-weight: 700;
       padding: 4px 10px;
       border-radius: 9999px;
-      background: rgba(224, 36, 36, 0.1);
-      color: #E02424;
+      background: rgba(245, 197, 24, 0.25);
+      color: #B45309;
     }
 
+    /* Table Grid */
     .table-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -377,9 +385,9 @@ HTML_PAGE = """<!DOCTYPE html>
       padding: 3px 8px;
       border-radius: 6px;
       font-size: 0.75rem;
-      font-weight: 600;
-      background: rgba(224, 36, 36, 0.1);
-      color: #E02424;
+      font-weight: 700;
+      background: rgba(245, 197, 24, 0.25);
+      color: #B45309;
     }
 
     .footer {
@@ -397,16 +405,14 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="hero-banner">
       <div class="hero-top">
         <div class="logo-group">
+          <!-- Minions Goggle Icon SVG -->
           <svg class="logo-icon" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="50" cy="50" r="10" fill="#FFFFFF"/>
-            <circle cx="50" cy="22" r="6" fill="#FFFFFF"/>
-            <circle cx="50" cy="78" r="6" fill="#FFFFFF"/>
-            <circle cx="22" cy="50" r="6" fill="#FFFFFF"/>
-            <circle cx="78" cy="50" r="6" fill="#FFFFFF"/>
-            <circle cx="30" cy="30" r="5" fill="#FFFFFF"/>
-            <circle cx="70" cy="30" r="5" fill="#FFFFFF"/>
-            <circle cx="30" cy="70" r="5" fill="#FFFFFF"/>
-            <circle cx="70" cy="70" r="5" fill="#FFFFFF"/>
+            <circle cx="50" cy="50" r="28" fill="#111111"/>
+            <circle cx="50" cy="50" r="20" fill="#FFFFFF"/>
+            <circle cx="50" cy="50" r="10" fill="#92400E"/>
+            <circle cx="50" cy="50" r="4" fill="#111111"/>
+            <rect x="0" y="44" width="22" height="12" rx="2" fill="#111111"/>
+            <rect x="78" y="44" width="22" height="12" rx="2" fill="#111111"/>
           </svg>
           <span class="brand-name">MinionsScout</span>
         </div>
@@ -417,7 +423,7 @@ HTML_PAGE = """<!DOCTYPE html>
       
       <div class="hero-title">Make an impact.</div>
       <div class="hero-subtitle">
-        Short-form video scraping, 480p H.264 transcode & GCS persistence on <span style="font-family: monospace; background: rgba(0,0,0,0.25); padding: 2px 8px; border-radius: 6px;">meta_layer_scr</span>
+        Short-form video scraping, 480p H.264 transcode & GCS persistence on <span style="font-family: monospace; background: rgba(0,0,0,0.12); padding: 2px 8px; border-radius: 6px; font-weight: 600;">meta_layer_scr</span>
       </div>
     </div>
 
@@ -425,7 +431,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="kpi-grid">
       <div class="editorial-card">
         <div class="kpi-label">Total Meta Ingestion</div>
-        <div class="kpi-value crimson" id="kpi-meta-total">0</div>
+        <div class="kpi-value yellow" id="kpi-meta-total">0</div>
         <div class="kpi-sub" id="kpi-meta-sub">0.0% of 9,453 videos</div>
       </div>
 
@@ -437,7 +443,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
       <div class="editorial-card">
         <div class="kpi-label">EMA Smoothed ETA</div>
-        <div class="kpi-value crimson" style="font-size: 1.9rem;" id="kpi-eta">--:--</div>
+        <div class="kpi-value yellow" style="font-size: 1.9rem;" id="kpi-eta">--:--</div>
         <div class="kpi-sub" id="kpi-eta-sub">Calculating...</div>
       </div>
 
@@ -452,7 +458,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="editorial-card progress-banner">
       <div class="progress-header">
         <span style="font-size: 1.1rem; font-family: 'Space Grotesk', sans-serif; font-weight: 700;">Overall Meta Layer Progress</span>
-        <span style="color: #FF5A5F; font-weight: 700; font-family: 'Space Grotesk', sans-serif;" id="meta-banner-stat">0 / 9,453 (0.0%)</span>
+        <span style="color: #FFE01B; font-weight: 700; font-family: 'Space Grotesk', sans-serif;" id="meta-banner-stat">0 / 9,453 (0.0%)</span>
       </div>
       <div class="progress-track" style="height: 12px; background: rgba(255, 255, 255, 0.1);">
         <div class="progress-fill" id="meta-progress-bar" style="width: 0%;"></div>
@@ -492,7 +498,7 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
         <div style="font-size: 0.85rem; color: #737373; margin-bottom: 14px;" id="ig-remaining">4,875 videos remaining</div>
         <div class="progress-track" style="background: rgba(17, 17, 17, 0.08); height: 8px;">
-          <div class="progress-fill" id="ig-progress-bar" style="width: 0%;"></div>
+          <div class="progress-fill" id="ig-progress-bar" style="width: 0%; background: linear-gradient(90deg, #FFE01B, #F59E0B);"></div>
         </div>
       </div>
 
@@ -507,8 +513,8 @@ HTML_PAGE = """<!DOCTYPE html>
             <tr><th>Platform</th><th>Uploaded</th><th>Target</th><th>Status</th></tr>
           </thead>
           <tbody>
-            <tr><td>Facebook</td><td id="t-fb-up" style="font-weight: 700;">0</td><td>4,578</td><td id="t-fb-pct" style="color: #E02424; font-weight: 700;">0.0%</td></tr>
-            <tr><td>Instagram</td><td id="t-ig-up" style="font-weight: 700;">0</td><td>4,875</td><td id="t-ig-pct" style="color: #E02424; font-weight: 700;">0.0%</td></tr>
+            <tr><td>Facebook</td><td id="t-fb-up" style="font-weight: 700;">0</td><td>4,578</td><td id="t-fb-pct" style="color: #D97706; font-weight: 700;">0.0%</td></tr>
+            <tr><td>Instagram</td><td id="t-ig-up" style="font-weight: 700;">0</td><td>4,875</td><td id="t-ig-pct" style="color: #D97706; font-weight: 700;">0.0%</td></tr>
             <tr><td>TikTok</td><td id="t-tt-up" style="font-weight: 700;">1,995</td><td>2,137</td><td style="color: #111111; font-weight: 700;">93.4%</td></tr>
             <tr><td>YouTube</td><td id="t-yt-up" style="font-weight: 700;">1,534</td><td>1,552</td><td style="color: #111111; font-weight: 700;">98.8%</td></tr>
           </tbody>
@@ -529,7 +535,7 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <div class="footer">
-      MinionsScout • Exponential Moving Average (EMA) Stabilized Speed & ETA • Last Ping: <span id="last-ping-time">--:--:--</span>
+      MinionsScout • Minions Electric Yellow Edition • Last Ping: <span id="last-ping-time">--:--:--</span>
     </div>
 
   </div>
@@ -628,7 +634,7 @@ def run_server(port: int = 8505):
 
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", port), DashboardHandler) as httpd:
-        print(f"\n🔥 MinionsScout Dashboard running at: http://localhost:{port}\n")
+        print(f"\n🍌 MinionsScout Yellow Dashboard running at: http://localhost:{port}\n")
         httpd.serve_forever()
 
 

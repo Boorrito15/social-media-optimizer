@@ -13,7 +13,7 @@ from utils.gcs import list_existing_objects
 
 st.set_page_config(
     page_title="MinionsScout — Pipeline Center",
-    page_icon="🔥",
+    page_icon="🍌",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -24,7 +24,7 @@ st.markdown(
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap');
     
     .stApp {
-        background-color: #F7F5F0;
+        background-color: #F8F6F0;
         font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         color: #111111;
     }
@@ -36,22 +36,25 @@ st.markdown(
     header[data-testid="stHeader"] { background: transparent; }
     .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1180px; }
 
+    /* Minions Electric Yellow Banner */
     .hero-banner {
-        background: linear-gradient(135deg, #E02424 0%, #B91C1C 40%, #7F1D1D 100%);
+        background: linear-gradient(135deg, #FFE01B 0%, #F5C518 45%, #E5A800 100%);
         border-radius: 24px;
         padding: 32px 36px;
-        color: #FFFFFF;
+        color: #111111;
         margin-bottom: 20px;
-        box-shadow: 0 16px 36px rgba(224, 36, 36, 0.22);
+        box-shadow: 0 16px 36px rgba(245, 197, 24, 0.35);
+        border: 1px solid rgba(0, 0, 0, 0.08);
     }
 
     .hero-title {
         font-family: 'Space Grotesk', sans-serif;
         font-size: 32px;
-        font-weight: 700;
+        font-weight: 800;
         letter-spacing: -0.03em;
         line-height: 1.1;
         margin-bottom: 6px;
+        color: #111111;
     }
 
     .editorial-card {
@@ -83,8 +86,8 @@ st.markdown(
         color: #111111;
         line-height: 1.1;
     }
-    .metric-value.crimson {
-        color: #E02424;
+    .metric-value.yellow {
+        color: #D97706;
     }
     .metric-caption {
         font-size: 13px;
@@ -103,7 +106,7 @@ st.markdown(
     .progress-fill {
         height: 100%;
         border-radius: 9999px;
-        background: linear-gradient(90deg, #E02424 0%, #FF5A5F 100%);
+        background: linear-gradient(90deg, #FFE01B 0%, #F59E0B 100%);
     }
 
     .apple-table {
@@ -131,11 +134,11 @@ st.markdown(
     
     .table-tag {
         font-size: 11px;
-        font-weight: 600;
+        font-weight: 700;
         padding: 3px 8px;
         border-radius: 6px;
-        background: rgba(224, 36, 36, 0.1);
-        color: #E02424;
+        background: rgba(245, 197, 24, 0.25);
+        color: #B45309;
     }
 </style>
 """,
@@ -186,11 +189,9 @@ ig_count = counts["instagram"]
 ig_pct = (ig_count / TOTAL_TARGETS["instagram"]) * 100
 ig_rem = TOTAL_TARGETS["instagram"] - ig_count
 
-# Record history point
 hist = st.session_state["history"]
 hist.append((now, current_meta))
 
-# EMA smoothing calculation over last 3 minutes / 30 downloads
 lookback_sec = 180.0
 min_downloads = 25
 
@@ -246,16 +247,16 @@ st.markdown(
 <div class="hero-banner">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
         <div style="display: flex; align-items: center; gap: 10px;">
-            <span style="font-size: 22px;">❋</span>
-            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;">MinionsScout</span>
+            <span style="font-size: 22px;">🍌</span>
+            <span style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: #111111;">MinionsScout</span>
         </div>
-        <span style="background: rgba(255,255,255,0.2); padding: 5px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em;">
+        <span style="background: rgba(17,17,17,0.12); padding: 5px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: #111111;">
             ● 2 WORKERS LIVE (10 THREADS)
         </span>
     </div>
     <div class="hero-title">Make an impact.</div>
-    <div style="font-size: 14px; opacity: 0.9;">
-        Short-form video scraping, 480p H.264 transcode & GCS persistence on <code style="background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; color: #fff;">meta_layer_scr</code>
+    <div style="font-size: 14px; opacity: 0.85; color: #111111; font-weight: 500;">
+        Short-form video scraping, 480p H.264 transcode & GCS persistence on <code style="background: rgba(0,0,0,0.12); padding: 2px 6px; border-radius: 4px; color: #111111; font-weight: 600;">meta_layer_scr</code>
     </div>
 </div>
 """,
@@ -272,7 +273,7 @@ with c1:
         f"""
     <div class="editorial-card">
         <div class="subhead">Total Meta Ingestion</div>
-        <div class="metric-value crimson">{current_meta:,}</div>
+        <div class="metric-value yellow">{current_meta:,}</div>
         <div class="metric-caption">{meta_pct:.1f}% of {target_meta:,} videos</div>
     </div>
     """,
@@ -296,7 +297,7 @@ with c3:
         f"""
     <div class="editorial-card">
         <div class="subhead">EMA Smoothed ETA</div>
-        <div class="metric-value crimson">{eta_val}</div>
+        <div class="metric-value yellow">{eta_val}</div>
         <div class="metric-caption">{eta_cap}</div>
     </div>
     """,
@@ -323,7 +324,7 @@ st.markdown(
 <div class="editorial-card" style="background: #111111; color: #FFFFFF;">
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <span style="font-weight: 700; font-family: 'Space Grotesk', sans-serif; font-size: 15px;">Overall Meta Layer Progress</span>
-        <span style="font-size: 14px; color: #FF5A5F; font-weight: 700; font-family: 'Space Grotesk', sans-serif;">{current_meta:,} / {target_meta:,} ({meta_pct:.1f}%)</span>
+        <span style="font-size: 14px; color: #FFE01B; font-weight: 700; font-family: 'Space Grotesk', sans-serif;">{current_meta:,} / {target_meta:,} ({meta_pct:.1f}%)</span>
     </div>
     <div class="progress-track" style="background: rgba(255,255,255,0.15);">
         <div class="progress-fill" style="width: {min(100.0, meta_pct):.1f}%;"></div>
@@ -347,7 +348,7 @@ with col_fb:
                 <div style="font-weight: 700; font-family: 'Space Grotesk', sans-serif; font-size: 16px;">Facebook Reels</div>
                 <div style="font-size: 12px; color: #737373;">5 Parallel Concurrency Threads</div>
             </div>
-            <span style="font-size: 12px; font-weight: 700; background: rgba(224,36,36,0.1); color: #E02424; padding: 3px 8px; border-radius: 9999px;">{fb_pct:.1f}%</span>
+            <span style="font-size: 12px; font-weight: 700; background: rgba(245,197,24,0.25); color: #B45309; padding: 3px 8px; border-radius: 9999px;">{fb_pct:.1f}%</span>
         </div>
         <div style="margin-top: 14px;">
             <span class="metric-value">{fb_count:,}</span>
@@ -371,7 +372,7 @@ with col_ig:
                 <div style="font-weight: 700; font-family: 'Space Grotesk', sans-serif; font-size: 16px;">Instagram Reels</div>
                 <div style="font-size: 12px; color: #737373;">5 Parallel Concurrency Threads</div>
             </div>
-            <span style="font-size: 12px; font-weight: 700; background: rgba(224,36,36,0.1); color: #E02424; padding: 3px 8px; border-radius: 9999px;">{ig_pct:.1f}%</span>
+            <span style="font-size: 12px; font-weight: 700; background: rgba(245,197,24,0.25); color: #B45309; padding: 3px 8px; border-radius: 9999px;">{ig_pct:.1f}%</span>
         </div>
         <div style="margin-top: 14px;">
             <span class="metric-value">{ig_count:,}</span>
@@ -379,7 +380,7 @@ with col_ig:
         </div>
         <div style="font-size: 12px; color: #737373; margin-top: 2px;">{ig_rem:,} videos remaining</div>
         <div class="progress-track">
-            <div class="progress-fill" style="width: {min(100.0, ig_pct):.1f}%;"></div>
+            <div class="progress-fill" style="width: {min(100.0, ig_pct):.1f}%; background: linear-gradient(90deg, #FFE01B, #F59E0B);"></div>
         </div>
     </div>
     """,
@@ -412,13 +413,13 @@ with t_col1:
                     <td>Facebook</td>
                     <td>{fb_count:,}</td>
                     <td style="color: #737373;">{TOTAL_TARGETS['facebook']:,}</td>
-                    <td style="color: #E02424;">{fb_pct:.1f}%</td>
+                    <td style="color: #D97706; font-weight: 700;">{fb_pct:.1f}%</td>
                 </tr>
                 <tr>
                     <td>Instagram</td>
                     <td>{ig_count:,}</td>
                     <td style="color: #737373;">{TOTAL_TARGETS['instagram']:,}</td>
-                    <td style="color: #E02424;">{ig_pct:.1f}%</td>
+                    <td style="color: #D97706; font-weight: 700;">{ig_pct:.1f}%</td>
                 </tr>
                 <tr>
                     <td>TikTok</td>
@@ -471,7 +472,7 @@ with t_col2:
 st.markdown(
     f"""
 <div style="text-align: center; font-size: 11px; color: #888888; margin-top: 20px; font-weight: 500;">
-    MinionsScout • Exponential Moving Average (EMA) Stabilized Speed & ETA • Last Ping: {datetime.now().strftime('%H:%M:%S')}
+    MinionsScout • Minions Electric Yellow Edition • Last Ping: {datetime.now().strftime('%H:%M:%S')}
 </div>
 """,
     unsafe_allow_html=True,
