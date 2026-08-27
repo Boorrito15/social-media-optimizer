@@ -2,12 +2,65 @@
 
 Reverse-chronological timeline (newest first) of committed changes, extracted
 from the GitHub repository history. Each day groups its commits with the exact
-ISO-8601 time and author.
+ISO-8601 time and author. For a quick read, start with the **summary below**;
+for the raw commit-by-commit record, scroll to the timeline.
 
 Contributors referenced here:
 - **Alden** (aldenwahsono / Alden Wahsono)
 - **Leon** (Leon Helfinger / leonhelfinger)
 - **Robert** (Robert Safin / Robert-Safin)
+
+---
+
+## What changed & why it matters (plain-English summary)
+
+### The project now actually works end-to-end
+The repo went from a bare skeleton to a working pipeline that:
+1. **Reads the raw social-media funnel CSV**, cleans it (standardises the messy
+   vendor column names, keeps only short-form posts on the target platforms, and
+   removes duplicate links, keeping the most-engaged copy of each), and writes
+   the result as both a CSV and a faster Parquet file.
+2. **Downloads the actual videos** behind those posts (via `yt-dlp`), re-encodes
+   each one to a **480p MP4** for consistency and smaller size, and **uploads it
+   to Google Cloud Storage**.
+
+So instead of just a cleaned spreadsheet, we now have the real short-form videos
+stored centrally in GCS — which is what we need for the downstream vision/ML work.
+
+### Scraping is now realistic and won't balloon your GCS bill
+Two things made a big practical difference:
+
+- **Browser-cookie authentication (Leon's "cookie-layer"):** The scraper can now
+  present a logged-in browser's cookies (via `--cookies` or `--cookies-from-browser`)
+  plus realistic desktop browser headers. This makes the requests look like a real
+  person instead of a bot, which **dramatically reduces the chance of YouTube/TikTok
+  rate-limiting or blocking us** — the exact problem that kept stalling the runs.
+- **Fast skip of already-downloaded videos ("skip_existing"):** Before processing,
+  the pipeline asks GCS once for the full list of videos we already have, then skips
+  anything already uploaded. Previously it checked per-video (hundreds/thousands of
+  network calls); now it's one call. This makes **re-runs and resumes nearly free**,
+  and lets several people (or machines) share the same GCS bucket without re-doing
+  each other's work.
+
+### The pipeline is resilient to interruptions
+We now write a durable **index / manifest / logs** to GCS as we go, so if a run
+crashes mid-way (it has), we don't lose track of what was already uploaded or what
+failed — we can resume and inspect failures afterward instead of starting over.
+
+### We tightened up git hygiene & fixed a latent bug
+- **Security/data:** raw data, generated outputs, service-account keys, `.env`, and
+  cookies are all **git-ignored** (never committed), and data files that had been
+  committed were **purged from git history** so they exist only locally and in GCS.
+- **A real bug was fixed:** the merged `cookie-layer` code imported a module
+  (`utils.hashing`) that didn't exist — it would have crashed the moment you ran
+  anything. We pointed that import at the actual file and confirmed all **27 tests
+  pass**, so the pipeline runs instead of failing instantly.
+
+### Where things stand
+- **Phase 2 (ingest/clean):** done.
+- **Phase 3 (scrape → 480p → GCS):** done for **YouTube** and **TikTok**.
+- **Instagram / Facebook:** still stubbed/queued (they need a real login/browser
+  strategy, which is a separate piece of work).
 
 ---
 
