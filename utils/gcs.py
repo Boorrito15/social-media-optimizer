@@ -91,6 +91,46 @@ def object_exists(bucket: str, object_name: str, *, project_id: str | None = Non
         return False
 
 
+def list_existing_objects(
+    bucket: str,
+    prefix: str = "",
+    *,
+    project_id: str | None = None,
+) -> set[str]:
+    """Return a set of object names that exist in GCS under ``prefix``.
+
+    Fetches the list in a single batch call (via google-cloud-storage or gsutil)
+    rather than making one network request per item.
+    """
+    if library_available():
+        try:
+            client = _client()
+            return {blob.name for blob in client.bucket(bucket).list_blobs(prefix=prefix)}
+        except Exception:
+            pass  # fall back to gsutil
+
+    project_id = project_id or gcp_project_id()
+    clean_prefix = prefix.strip("/")
+    pattern = f"gs://{bucket}/{clean_prefix}/**" if clean_prefix else f"gs://{bucket}/**"
+    try:
+        res = subprocess.run(
+            ["gsutil", "ls", pattern],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode == 0:
+            base_uri = f"gs://{bucket}/"
+            base_len = len(base_uri)
+            return {
+                line[base_len:].strip()
+                for line in res.stdout.splitlines()
+                if line.startswith(base_uri) and not line.endswith(":")
+            }
+    except Exception:
+        pass
+    return set()
+
+
 def _upload_via_library(
     local: Path,
     bucket: str,

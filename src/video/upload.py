@@ -36,7 +36,7 @@ from utils.config import (
     video_gcs_prefix,
     video_output_dir,
 )
-from utils.gcs import object_exists, sha256_file, upload_file
+from utils.gcs import list_existing_objects, object_exists, sha256_file, upload_file
 from src.video.download import (
     SUPPORTED_EXTRACTORS,
     MediaResolutionError,
@@ -122,6 +122,7 @@ def _process_one(
     transcode: bool = True,
     out_dir: str | Path | None = None,
     ffmpeg_threads: int = 0,
+    existing_objects: set[str] | None = None,
 ) -> dict:
     """Process a single post row, returning a manifest record dict."""
     url = row.get("url")
@@ -163,7 +164,8 @@ def _process_one(
         print(f"[video][dry-run] {platform_code}/{post_id} -> {rec['gcs_path']}")
         return rec
 
-    if object_exists(bucket, obj):
+    already_in_gcs = (obj in existing_objects) if existing_objects is not None else object_exists(bucket, obj)
+    if already_in_gcs:
         rec["status"] = "skipped"
         print(f"[video] already in GCS, skipping: {rec['gcs_path']}")
         return rec
@@ -284,6 +286,7 @@ def run_pipeline(
     concurrency: int | None = None,
     run_id: str | None = None,
     index_flush_every: int = 20,
+    skip_existing: bool = True,
 ) -> VideoJobResult:
     """Run the pipeline over a cleaned posts dataframe and aggregate results.
 
@@ -307,13 +310,64 @@ def run_pipeline(
             .fillna(df["platform"].astype(str).str.lower())
         )
         df = df[df["_resolver"].isin(wanted_lower)].drop(columns=["_resolver"])
-    if limit is not None:
-        df = df.head(limit)
 
     result = VideoJobResult()
-    rows = [dict(r) for _, r in df.iterrows()]
     all_records: list[dict] = []   # everything, for the final full manifest
-    pending: list[dict] = []       # incremenetally flushed to index shards
+    pending: list[dict] = []       # incrementally flushed to index shards
+
+    # Single batch call to GCS to discover all existing videos instantly
+    existing_objects: set[str] = set()
+    if not dry_run and skip_existing:
+        prefix = f"{video_gcs_prefix().strip('/')}/"
+        try:
+            existing_objects = list_existing_objects(bucket, prefix=prefix)
+        except Exception as exc:
+            print(f"[video] Note: could not pre-list GCS objects ({exc}); falling back to per-item check")
+
+    rows_to_process: list[dict] = []
+
+    for _, r in df.iterrows():
+        row_dict = dict(r)
+        url = row_dict.get("url")
+        platform_code = str(row_dict.get("platform") or "").strip().upper()
+        platform_name = platform_code_to_name(platform_code) or platform_code.lower()
+        post_id = media_id_from_url(str(url or ""), platform=platform_name)
+        obj = _gcs_object_name(post_id, platform_name)
+
+        if not dry_run and skip_existing and obj in existing_objects:
+            rec = {
+                "platform": platform_name,
+                "post_id": post_id,
+                "url": str(url) if url else None,
+                "status": "skipped",
+                "gcs_path": f"gs://{bucket}/{obj}",
+                "published_at": None,
+                "duration_s": None,
+                "title": None,
+                "sha256": None,
+                "size_bytes": None,
+                "source_codec": None,
+                "source_resolution": None,
+                "error": None,
+                "processed_at": datetime.now(timezone.utc).isoformat(),
+                "transcode_args": None,
+            }
+            all_records.append(rec)
+            result.skipped_existing += 1
+            result.attempted += 1
+        else:
+            rows_to_process.append(row_dict)
+
+    if result.skipped_existing > 0:
+        print(
+            f"[video] Direct skip: {result.skipped_existing} video(s) already exist in GCS. "
+            f"Resuming with {len(rows_to_process)} remaining post(s)."
+        )
+
+    if limit is not None:
+        rows_to_process = rows_to_process[:limit]
+
+    rows = rows_to_process
 
     def _flush_index() -> None:
         if not pending:
@@ -350,13 +404,15 @@ def run_pipeline(
                 row, bucket=bucket, dry_run=dry_run,
                 transcode=transcode_to_480p_enabled,
                 ffmpeg_threads=ffmpeg_threads,
+                existing_objects=existing_objects,
             ))
     else:
         with ThreadPoolExecutor(max_workers=concurrency) as ex:
             futures = [
                 ex.submit(_process_one, row, bucket=bucket, dry_run=dry_run,
                           transcode=transcode_to_480p_enabled,
-                          ffmpeg_threads=ffmpeg_threads)
+                          ffmpeg_threads=ffmpeg_threads,
+                          existing_objects=existing_objects)
                 for row in rows
             ]
             # Collect results linearly so record ordering + summary stay simple.
