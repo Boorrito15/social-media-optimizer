@@ -1,8 +1,12 @@
 # Social Media Optimizer
 
 All Blacks short-form content optimisation. Ingests the master social-media
-funnel dataset, cleans and de-dupes it, then labels targets for downstream
+funnel dataset, cleans and de-dupes it, then scrapes short-form videos, re-encodes
+them to 480p and uploads them to Google Cloud Storage for provenance + downstream
 modelling.
+
+See **[CHANGELOG.md](CHANGELOG.md)** for a history of changes and the project's
+contributors.
 
 ## Setup
 
@@ -46,8 +50,8 @@ Cleans the master funnel CSV:
 # defaults come from RAW_DATA_PATH / CLEAN_DATA_PATH in .env
 python -m src.ingestion.main
 
-# explicit input + output (the base path determines stem + directory)
-python -m src.ingestion.main --input data/raw/example.csv --output data/processed/out
+# explicit input + output (base path determines stem + directory)
+python -m src.ingestion.main --input data/raw/example.csv --output data/processed/posts_clean
 
 # skip the duplicate-link removal (inspection only)
 python -m src.ingestion.main --no-dedupe
@@ -97,6 +101,11 @@ Scraping strategy per platform (see `src/video/download.py`):
 | TikTok   | ✅ automated | `yt-dlp` (no browser)           |
 | IG / FB  | ⏳ queued    | stubbed; needs browser/login later |
 
+Authentication (optional, recommended when throttled) — see `--cookies` and
+`--cookies-from-browser` below. A logged-in cookie jar + realistic browser
+headers make anonymous scraping far less likely to be rate-limited by YouTube
+/TikTok.
+
 ```bash
 # Dry-run trace on 5 posts (no network / GCS writes)
 python -m src.video.main --limit 5 --dry-run
@@ -104,11 +113,32 @@ python -m src.video.main --limit 5 --dry-run
 # Process only YouTube, limit to 10
 python -m src.video.main --platforms youtube --limit 10
 
+# Authenticated scraping with browser cookies (e.g. chrome/safari/firefox)
+python -m src.video.main --cookies-from-browser chrome
+
+# Or point at an exported cookies.txt
+python -m src.video.main --cookies cookies.txt
+
 # Run for real (downloads + 480p transcode + upload to GCS)
 python -m src.video.main
 ```
 
 - Output object layout: `gs://sm-optimizer-processed/<VIDEO_GCS_PREFIX>/<platform>/<post_id>.mp4`.
+
+### CLI flags
+
+| Flag | Description |
+| ---- | ----------- |
+| `--platforms <a,b>` | Comma-separated platforms to process (youtube, tiktok, ...) |
+| `--limit N` | Process at most `N` posts (dry-run/scratch work) |
+| `--dry-run` | Trace the pipeline without downloading/transcoding/uploading |
+| `--no-transcode` | Upload the source (original resolution) instead of the 480p |
+| `--concurrency N` | Number of parallel workers (default `VIDEO_CONCURRENCY`) |
+| `--run-id <id>` | Stable id used to name index shards + logs |
+| `--log <file>` | Also upload the run's stdout to `logs/<run_id>.log` |
+| `--consolidate` | Rebuild the cumulative `videos_index.parquet` afterwards |
+| `--cookies <file>` | Path to a Netscape `cookies.txt` for authenticated scraping |
+| `--cookies-from-browser <browser>` | Load cookies from an installed browser (chrome, safari, ...) |
 
 ### 480p transcode profile
 
@@ -154,8 +184,11 @@ python -m src.video.main --consolidate
 
 ### Idempotency & concurrency
 
-- **Idempotent** — videos already in GCS (and already-transcoded locals) are
-  skipped, so any machine can resume the shared batch; GCS is the source of truth.
+- **Idempotent + fast skip** — before processing, the pipeline does **one** GCS
+  `list_existing_objects()` call to load every already-uploaded object into
+  memory, then skips any post whose `videos/<platform>/<post_id>.mp4` already
+  exists (O(1) lookup, no per-video network call). This makes re-runs/resumes on
+  the same shared GCS bucket very cheap, even across multiple machines.
 - **Concurrency** — `--concurrency N` / `VIDEO_CONCURRENCY` processes posts in
   parallel (8 cores unused by serial runs). YouTube throttles under parallel
   anonymous downloads, so keep it serial (`1`) with a small `VIDEO_REQUEST_DELAY`
@@ -164,6 +197,24 @@ python -m src.video.main --consolidate
 
 Videos and all artifacts land in **GCS, not the local machine** — the local
 disk is only a transient staging area (`data/videos/`, git-ignored).
+
+## Data layout & git hygiene
+
+`data/`, `config/*.json`, `.env`, cookies files and video binaries are
+**git-ignored** — raw source data and generated outputs stay local (and in GCS),
+never in version control:
+
+| Path | What it holds | Git status |
+| ---- | ------------- | ---------- |
+| `data/raw/` | original source CSV (e.g. master funnel data) | ignored |
+| `data/processed/` | cleaned `posts_clean.{csv,parquet}` + summary | ignored |
+| `data/videos/` | transient scrape/transcode staging | ignored |
+| `config/` | GCS service-account key (`config/*.json`) | ignored |
+| `.env` | environment / credentials | ignored |
+| `*.csv`, `*.parquet`, `*.mp4`, `*.log`, cookies | any stray data/creds/artifacts | ignored |
+
+The GCS service-account key and `.env` are never committed — collaborators
+receive them out-of-band (see below).
 
 ## Running a scrape (for teammates)
 
@@ -200,8 +251,10 @@ pip install -r requirements.txt
 ### 4. Scrape
 
 ```bash
-# YouTube (friend A) — serial; YouTube throttles anonymous parallel downloads
+# YouTube (friend A) — serial; YouTube throttles anonymous parallel downloads.
+# Use cookies if your IP starts getting throttled.
 python -m src.video.main --platforms youtube --concurrency 1
+python -m src.video.main --platforms youtube --concurrency 1 --cookies-from-browser chrome
 
 # TikTok (friend B) — parallel works fine here
 python -m src.video.main --platforms tiktok --concurrency 3
@@ -212,7 +265,8 @@ python -m src.video.main --platforms tiktok --limit 20 --dry-run
 
 Optional flags: `--run-id <id>` (names index shards + logs),
 `--log <file>` (also upload stdout log to `gs://.../logs/<run_id>.log`),
-`--consolidate` (rebuild the cumulative `videos_index.parquet` at the end).
+`--consolidate` (rebuild the cumulative `videos_index.parquet` at the end),
+`--cookies <file>` / `--cookies-from-browser <browser>` (authenticated scraping).
 
 Videos land at `gs://sm-optimizer-processed/videos/<platform>/<post_id>.mp4`.
 Provenance + failures accumulate in `gs://sm-optimizer-processed/manifests/`
