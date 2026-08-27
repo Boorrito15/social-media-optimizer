@@ -1,9 +1,9 @@
-"""Real-Time Zero-Flicker Dragonfruit Editorial Live Dashboard.
+"""Real-Time Zero-Flicker MinionsScout Editorial Live Dashboard.
 
 Brand Identity:
-- Warm Editorial Cream (#FAF8F5 / #F4F1EA) & Obsidian (#111111)
-- Fluid Dragonfruit Crimson Gradient Mesh (#E02424, #FF3B30, #991B1B)
-- Bold Grotesque Editorial Typography with heavy numerical KPI displays
+- Name: MinionsScout
+- Theme: Editorial Cream (#FAF8F5 / #F4F1EA), Obsidian (#111111), Dragonfruit Crimson (#E02424, #FF3B30, #991B1B)
+- Bold Grotesque Typography with heavy numerical KPI displays
 - Real-time 30-download rolling window ETA algorithm (zero reload, zero dimming)
 """
 
@@ -32,7 +32,6 @@ TOTAL_TARGETS = {
 
 bucket = gcs_processed_bucket()
 
-# Global thread-safe state cache
 STATE = {
     "facebook": 0,
     "instagram": 0,
@@ -47,12 +46,10 @@ STATE = {
     "window_size": 0,
 }
 
-# Rolling history: list of (timestamp, count) tuples
 HISTORY = deque(maxlen=300)
 
 
 def background_gcs_scanner():
-    """Continuously scan GCS and compute rolling 30-download speed & ETA."""
     global STATE, HISTORY
     
     while True:
@@ -127,7 +124,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DRAGONFRUIT — Pipeline Center</title>
+  <title>MinionsScout — Live Pipeline Center</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap');
     
@@ -151,7 +148,7 @@ HTML_PAGE = """<!DOCTYPE html>
       margin: 0 auto;
     }
 
-    /* Dragonfruit Hero Banner */
+    /* MinionsScout Hero Banner */
     .hero-banner {
       background: linear-gradient(135deg, #E02424 0%, #B91C1C 40%, #7F1D1D 100%);
       border-radius: 28px;
@@ -195,7 +192,7 @@ HTML_PAGE = """<!DOCTYPE html>
       font-family: 'Space Grotesk', sans-serif;
       font-size: 1.6rem;
       font-weight: 700;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
     }
 
@@ -221,7 +218,7 @@ HTML_PAGE = """<!DOCTYPE html>
     .hero-subtitle {
       font-size: 1rem;
       color: rgba(255, 255, 255, 0.85);
-      max-width: 600px;
+      max-width: 650px;
     }
 
     /* Editorial Card System */
@@ -385,11 +382,9 @@ HTML_PAGE = """<!DOCTYPE html>
 <body>
   <div class="container">
     
-    <!-- Hero Banner with Dragonfruit Radial Bloom Motif -->
     <div class="hero-banner">
       <div class="hero-top">
         <div class="logo-group">
-          <!-- Radial Seed Cluster SVG -->
           <svg class="logo-icon" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
             <circle cx="50" cy="50" r="10" fill="#FFFFFF"/>
             <circle cx="50" cy="22" r="6" fill="#FFFFFF"/>
@@ -401,7 +396,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <circle cx="30" cy="70" r="5" fill="#FFFFFF"/>
             <circle cx="70" cy="70" r="5" fill="#FFFFFF"/>
           </svg>
-          <span class="brand-name">DRAGONFRUIT</span>
+          <span class="brand-name">MinionsScout</span>
         </div>
         <div class="hero-tag">
           ● 2 WORKERS LIVE (10 THREADS)
@@ -410,7 +405,7 @@ HTML_PAGE = """<!DOCTYPE html>
       
       <div class="hero-title">Make an impact.</div>
       <div class="hero-subtitle">
-        Automated short-form video scraping, 480p H.264 transcode & GCS persistence on <span style="font-family: monospace; background: rgba(0,0,0,0.25); padding: 2px 8px; border-radius: 6px;">meta_layer_scr</span>
+        Short-form video scraping, 480p H.264 transcode & GCS persistence on <span style="font-family: monospace; background: rgba(0,0,0,0.25); padding: 2px 8px; border-radius: 6px;">meta_layer_scr</span>
       </div>
     </div>
 
@@ -455,7 +450,6 @@ HTML_PAGE = """<!DOCTYPE html>
     <!-- Platform Cards (FB & IG) -->
     <div class="platform-grid">
       
-      <!-- Facebook Card -->
       <div class="editorial-card">
         <div class="platform-header">
           <div>
@@ -473,7 +467,6 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Instagram Card -->
       <div class="editorial-card">
         <div class="platform-header">
           <div>
@@ -524,7 +517,7 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <div class="footer">
-      DRAGONFRUIT Brand System • Ultra-responsive Rolling 30-Download ETA • Last Ping: <span id="last-ping-time">--:--:--</span>
+      MinionsScout Brand System • Ultra-responsive Rolling 30-Download ETA • Last Ping: <span id="last-ping-time">--:--:--</span>
     </div>
 
   </div>
@@ -623,7 +616,7 @@ def run_server(port: int = 8505):
 
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", port), DashboardHandler) as httpd:
-        print(f"\n🔥 Dragonfruit Dashboard running at: http://localhost:{port}\n")
+        print(f"\n🔥 MinionsScout Dashboard running at: http://localhost:{port}\n")
         httpd.serve_forever()
 
 
