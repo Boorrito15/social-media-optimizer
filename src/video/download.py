@@ -22,7 +22,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from utils.config import video_output_dir, video_request_delay, ytdlp_cookies
+from utils.config import (
+    video_output_dir,
+    video_request_delay,
+    ytdlp_cookies,
+    ytdlp_cookies_from_browser,
+)
 
 # Platforms this resolver has an automated (yt-dlp) path for.
 SUPPORTED_EXTRACTORS = {"youtube", "tiktok", "instagram", "facebook"}
@@ -79,6 +84,18 @@ def published_at_from_info(info: dict) -> str | None:
         return f"{up[:4]}-{up[4:6]}-{up[6:8]}T00:00:00Z"
     return None
 
+
+_DEFAULT_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Fetch-Mode": "navigate",
+}
+
 _DEFAULT_YDTPLP_OPTS = {
     "quiet": True,
     "no_warnings": True,
@@ -86,7 +103,34 @@ _DEFAULT_YDTPLP_OPTS = {
     "format": "bestvideo[height<=?720]+bestaudio/best[height<=?720]/best",
     "merge_output_format": "mp4",
     "outtmpl": "%(id)s.%(ext)s",
+    "http_headers": _DEFAULT_HTTP_HEADERS,
+    "retries": 3,
+    "fragment_retries": 3,
 }
+
+
+def _build_ydl_opts(
+    *,
+    cookiefile: str | None = None,
+    cookies_from_browser: str | None = None,
+    outtmpl: str | None = None,
+    quiet: bool = True,
+) -> dict:
+    opts = dict(_DEFAULT_YDTPLP_OPTS)
+    opts["quiet"] = quiet
+
+    cookiefile = cookiefile or ytdlp_cookies()
+    if cookiefile and Path(cookiefile).is_file():
+        opts["cookiefile"] = str(Path(cookiefile).expanduser())
+
+    cookies_from_browser = cookies_from_browser or ytdlp_cookies_from_browser()
+    if cookies_from_browser:
+        opts["cookiesfrombrowser"] = (cookies_from_browser.strip().lower(),)
+
+    if outtmpl:
+        opts["outtmpl"] = outtmpl
+
+    return opts
 
 
 @dataclass
@@ -148,7 +192,13 @@ def _info_to_resolved(platform: str, url: str, info: dict) -> ResolvedMedia:
     )
 
 
-def resolve(url: str, platform: str | None = None) -> ResolvedMedia:
+def resolve(
+    url: str,
+    platform: str | None = None,
+    *,
+    cookies: str | None = None,
+    cookies_from_browser: str | None = None,
+) -> ResolvedMedia:
     """Resolve a post URL to media metadata using yt-dlp.
 
     This only *inspects* the page (extract info) — it does not download. It
@@ -173,10 +223,11 @@ def resolve(url: str, platform: str | None = None) -> ResolvedMedia:
 
     import yt_dlp
 
-    opts = dict(_DEFAULT_YDTPLP_OPTS)
-    cookies = ytdlp_cookies()
-    if cookies:
-        opts["cookiefile"] = cookies
+    opts = _build_ydl_opts(
+        cookiefile=cookies,
+        cookies_from_browser=cookies_from_browser,
+        quiet=True,
+    )
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -196,6 +247,9 @@ def download(
     media: ResolvedMedia,
     out_dir: str | Path | None = None,
     overwrite: bool = False,
+    *,
+    cookies: str | None = None,
+    cookies_from_browser: str | None = None,
 ) -> Path | None:
     """Download a resolved media reference into ``out_dir``.
 
@@ -215,12 +269,12 @@ def download(
     if target.exists() and not overwrite:
         return target
 
-    opts = dict(_DEFAULT_YDTPLP_OPTS)
-    opts["outtmpl"] = str(platform_dir / f"{media.post_id}.%(ext)s")
-    opts["quiet"] = False
-    cookies = ytdlp_cookies()
-    if cookies:
-        opts["cookiefile"] = cookies
+    opts = _build_ydl_opts(
+        cookiefile=cookies,
+        cookies_from_browser=cookies_from_browser,
+        outtmpl=str(platform_dir / f"{media.post_id}.%(ext)s"),
+        quiet=False,
+    )
 
     # Optional inter-request delay to stay under the platform's throttling
     # threshold when scraping anonymously (0 by default).
@@ -228,8 +282,12 @@ def download(
     if delay:
         time.sleep(delay)
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.download([media.url])
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([media.url])
+    except Exception as exc:
+        print(f"[video] yt-dlp download failed [{media.platform}] {media.post_id}: {exc}")
+        return None
 
     # Locate the produced file (mp4 merge; fall back to any file with the id).
     if target.exists():

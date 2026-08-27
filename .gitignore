@@ -21,11 +21,21 @@ data/videos/
 *.jpg
 *.png
 *.parquet
+*.csv
+*.tsv
+*.jsonl
+
+# Raw / build artifacts that must stay local
+*.log
+*.tmp
+*.swp
 
 # Environment Variables & Keys
 .env
 .env.*
 !.env.example
+cookies.txt
+*.cookies
 
 # Service account keys / credentials JSON (never commit these)
 *.json

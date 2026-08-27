@@ -52,12 +52,30 @@ The pipeline automatically handles short-form video extraction, format normaliza
 python -m src.video.main --platforms instagram --concurrency 5
 python -m src.video.main --platforms facebook --concurrency 5
 
+# Authenticated scraping with browser cookies (e.g. chrome/safari/firefox)
+python -m src.video.main --cookies-from-browser chrome
+
 # Scrape all 4 platforms in a single command
 python -m src.video.main --platforms youtube,tiktok,instagram,facebook
 
 # Dry-run test (5 items, no downloads or GCS uploads)
 python -m src.video.main --limit 5 --dry-run
 ```
+
+### CLI Flags
+
+| Flag | Description |
+| ---- | ----------- |
+| `--platforms <a,b>` | Comma-separated platforms to process (youtube, tiktok, instagram, facebook) |
+| `--limit N` | Process at most `N` posts (dry-run/scratch work) |
+| `--dry-run` | Trace the pipeline without downloading/transcoding/uploading |
+| `--no-transcode` | Upload the source (original resolution) instead of the 480p |
+| `--concurrency N` | Number of parallel workers (default `VIDEO_CONCURRENCY`) |
+| `--run-id <id>` | Stable id used to name index shards + logs |
+| `--log <file>` | Also upload the run's stdout to `logs/<run_id>.log` |
+| `--consolidate` | Rebuild the cumulative `videos_index.parquet` afterwards |
+| `--cookies <file>` | Path to a Netscape `cookies.txt` for authenticated scraping |
+| `--cookies-from-browser <browser>` | Load cookies from an installed browser (chrome, safari, ...) |
 
 ---
 
