@@ -21,6 +21,14 @@ data/videos/
 *.jpg
 *.png
 *.parquet
+*.csv
+*.tsv
+*.jsonl
+
+# Raw / build artifacts that must stay local
+*.log
+*.tmp
+*.swp
 
 # Environment Variables & Keys
 .env
