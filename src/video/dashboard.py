@@ -1,115 +1,170 @@
 import sys
 import time
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
 # Ensure project root is on sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-import pandas as pd
 import streamlit as st
-
 from utils.config import gcs_processed_bucket
 from utils.gcs import list_existing_objects
 
 st.set_page_config(
-    page_title="Media Pipeline — Live Monitor",
-    page_icon="🍏",
+    page_title="Pipeline Command Center",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 # -----------------------------------------------------------------------------
-# Apple Human Interface Inspired CSS
+# Apple Human Interface Dark CSS Injection
 # -----------------------------------------------------------------------------
-st.markdown("""
+st.markdown(
+    """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;500;600;700&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
-        color: #f5f5f7;
-    }
+    /* System Font & Background */
+    @import url('https://fonts.cdnfonts.com/css/sf-pro-display');
     
     .stApp {
-        background: radial-gradient(circle at 50% 0%, #1c1c1e 0%, #000000 75%);
+        background-color: #000000;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
+        color: #F5F5F7;
     }
 
-    /* Apple Glass Card */
+    /* Prevent Screen Dimming & Reload Flicker */
+    [data-testid="stStatusWidget"] { display: none !important; }
+    .stApp[data-test-script-state="running"] > div:first-child { opacity: 1 !important; filter: none !important; }
+    div[data-testid="stAppViewBlockContainer"] { opacity: 1 !important; filter: none !important; }
+
+    /* Hide standard Streamlit header & margins */
+    header[data-testid="stHeader"] { background: transparent; }
+    .block-container { padding-top: 2rem; padding-bottom: 2rem; max-width: 1200px; }
+
+    /* Apple Glassmorphism Card */
     .apple-card {
-        background: rgba(255, 255, 255, 0.04);
-        backdrop-filter: blur(30px);
-        -webkit-backdrop-filter: blur(30px);
+        background: rgba(28, 28, 30, 0.65);
+        backdrop-filter: blur(25px) saturate(190%);
+        -webkit-backdrop-filter: blur(25px) saturate(190%);
         border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 22px;
-        padding: 22px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-        transition: transform 0.2s ease, border-color 0.2s ease;
+        border-radius: 18px;
+        padding: 20px 22px;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+        margin-bottom: 16px;
+        transition: border-color 0.2s ease, transform 0.2s ease;
     }
     .apple-card:hover {
         border-color: rgba(255, 255, 255, 0.16);
     }
 
-    .apple-metric-title {
-        font-size: 0.8rem;
-        font-weight: 500;
-        letter-spacing: 0.04em;
-        color: #86868b;
+    /* Typography Utilities */
+    .subhead {
+        font-size: 11px;
+        font-weight: 600;
         text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: rgba(235, 235, 245, 0.6);
         margin-bottom: 6px;
     }
-    
-    .apple-metric-val {
-        font-size: 2.1rem;
+    .metric-value {
+        font-size: 32px;
         font-weight: 700;
         letter-spacing: -0.03em;
-        color: #f5f5f7;
+        color: #FFFFFF;
+        line-height: 1.1;
+    }
+    .metric-caption {
+        font-size: 13px;
+        color: rgba(235, 235, 245, 0.4);
+        margin-top: 6px;
     }
 
-    .apple-metric-sub {
-        font-size: 0.85rem;
-        color: #86868b;
-        margin-top: 4px;
-    }
-
-    .status-pill {
+    /* Status Pill */
+    .apple-badge {
         display: inline-flex;
         align-items: center;
-        gap: 8px;
-        background: rgba(48, 209, 88, 0.12);
-        color: #30d158;
-        border: 1px solid rgba(48, 209, 88, 0.25);
-        padding: 6px 14px;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        padding: 5px 12px;
         border-radius: 9999px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        letter-spacing: -0.01em;
+        background: rgba(48, 209, 88, 0.12);
+        color: #30D158;
+        border: 1px solid rgba(48, 209, 88, 0.22);
     }
-
     .status-dot {
-        width: 8px;
-        height: 8px;
+        width: 6px;
+        height: 6px;
+        background-color: #30D158;
         border-radius: 50%;
-        background-color: #30d158;
-        box-shadow: 0 0 12px #30d158;
+        box-shadow: 0 0 8px #30D158;
     }
 
-    /* Custom Streamlit Progress Bar */
-    .stProgress > div > div > div > div {
-        background: linear-gradient(90deg, #2997ff 0%, #af52de 50%, #ff2d55 100%);
-        border-radius: 10px;
-    }
-    .stProgress > div > div > div {
-        background-color: rgba(255, 255, 255, 0.08);
-        border-radius: 10px;
-        height: 8px;
+    /* Code Pill */
+    .code-pill {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: #0A84FF;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 12px;
+        padding: 2px 7px;
+        border-radius: 6px;
     }
 
-    /* Hide standard header/footer */
-    #MainMenu, footer, header {visibility: hidden;}
-    .block-container {padding-top: 2rem; padding-bottom: 2rem;}
+    /* Apple-Style Progress Bar */
+    .progress-track {
+        height: 6px;
+        border-radius: 9999px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+        margin-top: 12px;
+    }
+    .progress-fill {
+        height: 100%;
+        border-radius: 9999px;
+        background: #0A84FF;
+        transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .progress-fill.meta {
+        background: linear-gradient(90deg, #0A84FF 0%, #BF5AF2 100%);
+    }
+
+    /* Table Styling */
+    .apple-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+    .apple-table th {
+        text-align: left;
+        color: rgba(235, 235, 245, 0.5);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .apple-table td {
+        padding: 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        color: #FFFFFF;
+    }
+    .apple-table tr:last-child td { border-bottom: none; }
+    
+    .table-tag {
+        font-size: 11px;
+        font-weight: 500;
+        padding: 3px 8px;
+        border-radius: 6px;
+        background: rgba(48, 209, 88, 0.12);
+        color: #30D158;
+    }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 TOTAL_TARGETS = {
     "facebook": 4578,
@@ -120,12 +175,11 @@ TOTAL_TARGETS = {
 
 bucket = gcs_processed_bucket()
 
-if "start_time" not in st.session_state:
-    st.session_state["start_time"] = time.time()
-if "initial_counts" not in st.session_state:
-    st.session_state["initial_counts"] = None
+# Session state for rolling history
+if "history" not in st.session_state:
+    st.session_state["history"] = deque(maxlen=200)
 
-@st.cache_data(ttl=3)
+@st.cache_data(ttl=2)
 def fetch_data():
     objs = list_existing_objects(bucket, prefix="videos/")
     counts = {
@@ -134,209 +188,301 @@ def fetch_data():
         "tiktok": sum(1 for o in objs if "videos/tiktok/" in o),
         "youtube": sum(1 for o in objs if "videos/youtube/" in o),
     }
-    return counts, objs
+    recent = [o.replace("videos/", "") for o in sorted(objs, reverse=True) if o.endswith(".mp4")][:5]
+    return counts, objs, recent
 
-counts, all_objs = fetch_data()
+counts, all_objs, recent_files = fetch_data()
 
-if st.session_state["initial_counts"] is None:
-    st.session_state["initial_counts"] = counts.copy()
-
-elapsed = max(1.0, time.time() - st.session_state["start_time"])
-initial_meta = st.session_state["initial_counts"]["facebook"] + st.session_state["initial_counts"]["instagram"]
+now = time.time()
 current_meta = counts["facebook"] + counts["instagram"]
-meta_delta = current_meta - initial_meta
 target_meta = TOTAL_TARGETS["facebook"] + TOTAL_TARGETS["instagram"]
 meta_remaining = max(0, target_meta - current_meta)
+meta_pct = (current_meta / target_meta) * 100
 
-vpm = (meta_delta / elapsed) * 60.0
-vph = vpm * 60.0
+fb_count = counts["facebook"]
+fb_pct = (fb_count / TOTAL_TARGETS["facebook"]) * 100
+fb_rem = TOTAL_TARGETS["facebook"] - fb_count
 
-if vpm > 0.05:
-    mins_left = meta_remaining / vpm
-    eta_dt = datetime.now() + timedelta(minutes=mins_left)
-    eta_main = eta_dt.strftime('%H:%M')
-    eta_sub = f"in ~{int(mins_left//60)}h {int(mins_left%60)}m"
+ig_count = counts["instagram"]
+ig_pct = (ig_count / TOTAL_TARGETS["instagram"]) * 100
+ig_rem = TOTAL_TARGETS["instagram"] - ig_count
+
+# Record history point
+hist = st.session_state["history"]
+if not hist or hist[-1][1] != current_meta:
+    hist.append((now, current_meta))
+
+# Rolling 30-download speed & ETA
+target_window = 30
+ref_time, ref_count = hist[0]
+for t_hist, c_hist in reversed(hist):
+    if (current_meta - c_hist) >= target_window:
+        ref_time, ref_count = t_hist, c_hist
+        break
+
+delta_count = current_meta - ref_count
+delta_time = max(1.0, now - ref_time)
+
+if delta_count > 0 and delta_time > 1.0:
+    vps = delta_count / delta_time
+    vpm = vps * 60.0
+    vph = int(vps * 3600.0)
+    seconds_left = meta_remaining / vps
+    eta_dt = datetime.now() + timedelta(seconds=seconds_left)
+    hours = int(seconds_left // 3600)
+    minutes = int((seconds_left % 3600) // 60)
+    eta_val = eta_dt.strftime("%H:%M")
+    eta_cap = f"in ~{hours}h {minutes}m (last {delta_count} vids)"
 else:
-    eta_main = "Calculating"
-    eta_sub = "speed..."
+    vpm = 0.0
+    vph = 0
+    eta_val = "--:--"
+    eta_cap = "Calibrating speed..."
 
 # -----------------------------------------------------------------------------
-# Top Navigation Bar (Apple Style)
+# Header Section
 # -----------------------------------------------------------------------------
-nav_col1, nav_col2 = st.columns([3, 1])
-with nav_col1:
-    st.markdown("""
-    <div style="display: flex; align-items: baseline; gap: 14px; margin-bottom: 2px;">
-        <h1 style="font-size: 2.1rem; font-weight: 700; letter-spacing: -0.04em; margin: 0; color: #ffffff;">
-            Pipeline Overview
-        </h1>
-        <span style="font-size: 0.85rem; color: #86868b; font-weight: 500;">
-            Branch: <span style="color: #2997ff; font-family: monospace;">meta_layer_scr</span>
-        </span>
+header_col1, header_col2 = st.columns([4, 1])
+with header_col1:
+    st.markdown(
+        """
+    <div style="margin-bottom: 24px;">
+        <h1 style="font-size: 28px; font-weight: 700; letter-spacing: -0.03em; margin: 0; color: #FFFFFF;">Pipeline Command Center</h1>
+        <p style="color: rgba(235, 235, 245, 0.6); font-size: 14px; margin-top: 4px;">
+            Short-form video scraping, 480p H.264 transcode & GCS sync on <span class="code-pill">meta_layer_scr</span>
+        </p>
     </div>
-    <div style="font-size: 0.9rem; color: #86868b; margin-bottom: 20px;">
-        Automated short-form video scraping, 480p H.264 transcode & GCS persistence.
-    </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
-with nav_col2:
-    st.markdown("""
-    <div style="text-align: right; padding-top: 6px;">
-        <div class="status-pill">
-            <span class="status-dot"></span>
-            <span>2 Workers Live (10 Threads)</span>
+with header_col2:
+    st.markdown(
+        """
+    <div style="display: flex; justify-content: flex-end; align-items: center; height: 100%;">
+        <div class="apple-badge">
+            <div class="status-dot"></div>
+            2 Workers Live (10 Threads)
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 # -----------------------------------------------------------------------------
-# Key Metric KPI Tiles (Glass Cards)
+# Top Metrics Row
 # -----------------------------------------------------------------------------
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+c1, c2, c3, c4 = st.columns(4)
 
-with kpi1:
-    meta_pct = (current_meta / target_meta) * 100
-    st.markdown(f"""
+with c1:
+    st.markdown(
+        f"""
     <div class="apple-card">
-        <div class="apple-metric-title">Total Meta Ingestion</div>
-        <div class="apple-metric-val">{current_meta:,}</div>
-        <div class="apple-metric-sub">{meta_pct:.1f}% of {target_meta:,} videos</div>
+        <div class="subhead">Total Meta Ingestion</div>
+        <div class="metric-value">{current_meta:,}</div>
+        <div class="metric-caption">{meta_pct:.1f}% of {target_meta:,} videos</div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
-with kpi2:
-    st.markdown(f"""
+with c2:
+    st.markdown(
+        f"""
     <div class="apple-card">
-        <div class="apple-metric-title">Current Speed</div>
-        <div class="apple-metric-val" style="color: #2997ff;">{vpm:.1f} <span style="font-size: 1.1rem; font-weight: 500;">/min</span></div>
-        <div class="apple-metric-sub">~{int(vph):,} videos / hour</div>
+        <div class="subhead">Current Speed</div>
+        <div class="metric-value" style="color: #0A84FF;">{vpm:.1f} <span style="font-size: 18px; font-weight: 500; color: rgba(235,235,245,0.6);">/min</span></div>
+        <div class="metric-caption">~{vph:,} videos / hour</div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
-with kpi3:
-    st.markdown(f"""
+with c3:
+    st.markdown(
+        f"""
     <div class="apple-card">
-        <div class="apple-metric-title">Estimated Time (ETA)</div>
-        <div class="apple-metric-val" style="color: #30d158; font-size: 1.8rem;">{eta_main}</div>
-        <div class="apple-metric-sub">{eta_sub}</div>
+        <div class="subhead">ETA (Last 30 Vids)</div>
+        <div class="metric-value" style="color: #30D158;">{eta_val}</div>
+        <div class="metric-caption">{eta_cap}</div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
-with kpi4:
-    st.markdown(f"""
+with c4:
+    st.markdown(
+        f"""
     <div class="apple-card">
-        <div class="apple-metric-title">GCS Target Bucket</div>
-        <div class="apple-metric-val" style="font-size: 1.25rem; color: #af52de; word-break: break-all;">{bucket}</div>
-        <div class="apple-metric-sub">asia-southeast2 • standard</div>
+        <div class="subhead">GCS Target Bucket</div>
+        <div class="metric-value" style="font-size: 18px; font-weight: 600; color: #BF5AF2; padding-top: 6px;">{bucket}</div>
+        <div class="metric-caption">asia-southeast2 • standard</div>
     </div>
-    """, unsafe_allow_html=True)
-
-st.write("")
+    """,
+        unsafe_allow_html=True,
+    )
 
 # -----------------------------------------------------------------------------
-# Overall Progress Segment
+# Overall Meta Layer Progress
 # -----------------------------------------------------------------------------
-st.markdown(f"""
-<div class="apple-card" style="margin-bottom: 20px;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-        <span style="font-weight: 600; font-size: 1rem; letter-spacing: -0.02em;">Meta Layer Progress (Facebook + Instagram)</span>
-        <span style="font-weight: 700; color: #2997ff; font-size: 1.05rem;">{current_meta:,} / {target_meta:,} ({meta_pct:.1f}%)</span>
+st.markdown(
+    f"""
+<div class="apple-card">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-weight: 600; font-size: 14px;">Overall Meta Layer Progress</span>
+        <span style="font-size: 13px; color: #0A84FF; font-weight: 600;">{current_meta:,} / {target_meta:,} ({meta_pct:.1f}%)</span>
+    </div>
+    <div class="progress-track">
+        <div class="progress-fill meta" style="width: {min(100.0, meta_pct):.1f}%;"></div>
     </div>
 </div>
-""", unsafe_allow_html=True)
-st.progress(min(1.0, current_meta / target_meta))
-
-st.write("")
+""",
+    unsafe_allow_html=True,
+)
 
 # -----------------------------------------------------------------------------
-# Platform Deep Dive Cards
+# Source Details Grid (FB & IG)
 # -----------------------------------------------------------------------------
-p_col1, p_col2 = st.columns(2)
+col_fb, col_ig = st.columns(2)
 
-with p_col1:
-    fb_pct = (counts["facebook"] / TOTAL_TARGETS["facebook"]) * 100
-    st.markdown(f"""
+with col_fb:
+    st.markdown(
+        f"""
     <div class="apple-card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <div style="width: 32px; height: 32px; border-radius: 8px; background: rgba(24, 119, 242, 0.15); display: flex; align-items: center; justify-content: center; font-weight: bold; color: #1877F2;">
-                    f
-                </div>
-                <div>
-                    <div style="font-weight: 600; font-size: 1rem; color: #f5f5f7;">Facebook Reels</div>
-                    <div style="font-size: 0.75rem; color: #86868b;">5 Parallel Concurrency Threads</div>
-                </div>
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+                <div style="font-weight: 600; font-size: 15px;">Facebook Reels</div>
+                <div style="font-size: 12px; color: rgba(235, 235, 245, 0.4);">5 Parallel Concurrency Threads</div>
             </div>
-            <span style="font-weight: 700; font-size: 1.2rem; color: #1877F2;">{fb_pct:.1f}%</span>
+            <span style="font-size: 16px; font-weight: 700; color: #0A84FF;">{fb_pct:.1f}%</span>
         </div>
-        <div style="font-size: 1.7rem; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 2px;">
-            {counts['facebook']:,} <span style="font-size: 0.9rem; color: #86868b; font-weight: 400;">/ {TOTAL_TARGETS['facebook']:,}</span>
+        <div style="margin-top: 14px;">
+            <span class="metric-value">{fb_count:,}</span>
+            <span style="color: rgba(235, 235, 245, 0.4); font-size: 14px;"> / {TOTAL_TARGETS['facebook']:,}</span>
         </div>
-        <div style="font-size: 0.8rem; color: #86868b; margin-bottom: 12px;">
-            {TOTAL_TARGETS['facebook'] - counts['facebook']:,} videos remaining
+        <div style="font-size: 12px; color: rgba(235, 235, 245, 0.4); margin-top: 2px;">{fb_rem:,} videos remaining</div>
+        <div class="progress-track">
+            <div class="progress-fill" style="width: {min(100.0, fb_pct):.1f}%; background: #0A84FF;"></div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
-    st.progress(min(1.0, counts["facebook"] / TOTAL_TARGETS["facebook"]))
+    """,
+        unsafe_allow_html=True,
+    )
 
-with p_col2:
-    ig_pct = (counts["instagram"] / TOTAL_TARGETS["instagram"]) * 100
-    st.markdown(f"""
+with col_ig:
+    st.markdown(
+        f"""
     <div class="apple-card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <div style="width: 32px; height: 32px; border-radius: 8px; background: rgba(225, 48, 108, 0.15); display: flex; align-items: center; justify-content: center; font-size: 1.1rem; color: #E1306C;">
-                    📸
-                </div>
-                <div>
-                    <div style="font-weight: 600; font-size: 1rem; color: #f5f5f7;">Instagram Reels</div>
-                    <div style="font-size: 0.75rem; color: #86868b;">5 Parallel Concurrency Threads</div>
-                </div>
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+                <div style="font-weight: 600; font-size: 15px;">Instagram Reels</div>
+                <div style="font-size: 12px; color: rgba(235, 235, 245, 0.4);">5 Parallel Concurrency Threads</div>
             </div>
-            <span style="font-weight: 700; font-size: 1.2rem; color: #E1306C;">{ig_pct:.1f}%</span>
+            <span style="font-size: 16px; font-weight: 700; color: #FF375F;">{ig_pct:.1f}%</span>
         </div>
-        <div style="font-size: 1.7rem; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 2px;">
-            {counts['instagram']:,} <span style="font-size: 0.9rem; color: #86868b; font-weight: 400;">/ {TOTAL_TARGETS['instagram']:,}</span>
+        <div style="margin-top: 14px;">
+            <span class="metric-value">{ig_count:,}</span>
+            <span style="color: rgba(235, 235, 245, 0.4); font-size: 14px;"> / {TOTAL_TARGETS['instagram']:,}</span>
         </div>
-        <div style="font-size: 0.8rem; color: #86868b; margin-bottom: 12px;">
-            {TOTAL_TARGETS['instagram'] - counts['instagram']:,} videos remaining
+        <div style="font-size: 12px; color: rgba(235, 235, 245, 0.4); margin-top: 2px;">{ig_rem:,} videos remaining</div>
+        <div class="progress-track">
+            <div class="progress-fill" style="width: {min(100.0, ig_pct):.1f}%; background: #FF375F;"></div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
-    st.progress(min(1.0, counts["instagram"] / TOTAL_TARGETS["instagram"]))
-
-st.write("")
+    """,
+        unsafe_allow_html=True,
+    )
 
 # -----------------------------------------------------------------------------
-# Clean Data Table & Recent Uploads
+# Tables Row
 # -----------------------------------------------------------------------------
-t_col1, t_col2 = st.columns([1, 1])
+t_col1, t_col2 = st.columns(2)
 
 with t_col1:
-    st.markdown("""<div class="apple-metric-title">All Platforms Status</div>""", unsafe_allow_html=True)
-    table_df = pd.DataFrame([
-        {"Platform": "Facebook", "Scraped": f"{counts['facebook']:,}", "Target": f"{TOTAL_TARGETS['facebook']:,}", "Status": f"{fb_pct:.1f}%"},
-        {"Platform": "Instagram", "Scraped": f"{counts['instagram']:,}", "Target": f"{TOTAL_TARGETS['instagram']:,}", "Status": f"{ig_pct:.1f}%"},
-        {"Platform": "TikTok", "Scraped": f"{counts['tiktok']:,}", "Target": f"{TOTAL_TARGETS['tiktok']:,}", "Status": "93.4%"},
-        {"Platform": "YouTube", "Scraped": f"{counts['youtube']:,}", "Target": f"{TOTAL_TARGETS['youtube']:,}", "Status": "98.8%"},
-    ])
-    st.dataframe(table_df, use_container_width=True, hide_index=True)
+    tt_pct = (counts['tiktok'] / TOTAL_TARGETS['tiktok']) * 100
+    yt_pct = (counts['youtube'] / TOTAL_TARGETS['youtube']) * 100
+    st.markdown(
+        f"""
+    <div class="apple-card">
+        <div class="subhead" style="margin-bottom: 12px;">All Platforms Status</div>
+        <table class="apple-table">
+            <thead>
+                <tr>
+                    <th>Platform</th>
+                    <th>Uploaded</th>
+                    <th>Target</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Facebook</td>
+                    <td>{fb_count:,}</td>
+                    <td style="color: rgba(235,235,245,0.6);">{TOTAL_TARGETS['facebook']:,}</td>
+                    <td style="color: #0A84FF;">{fb_pct:.1f}%</td>
+                </tr>
+                <tr>
+                    <td>Instagram</td>
+                    <td>{ig_count:,}</td>
+                    <td style="color: rgba(235,235,245,0.6);">{TOTAL_TARGETS['instagram']:,}</td>
+                    <td style="color: #FF375F;">{ig_pct:.1f}%</td>
+                </tr>
+                <tr>
+                    <td>TikTok</td>
+                    <td>{counts['tiktok']:,}</td>
+                    <td style="color: rgba(235,235,245,0.6);">{TOTAL_TARGETS['tiktok']:,}</td>
+                    <td style="color: #30D158;">{tt_pct:.1f}%</td>
+                </tr>
+                <tr>
+                    <td>YouTube</td>
+                    <td>{counts['youtube']:,}</td>
+                    <td style="color: rgba(235,235,245,0.6);">{TOTAL_TARGETS['youtube']:,}</td>
+                    <td style="color: #30D158;">{yt_pct:.1f}%</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
 
 with t_col2:
-    st.markdown("""<div class="apple-metric-title">Recent GCS 480p Deliverables</div>""", unsafe_allow_html=True)
-    recent_objs = [o for o in sorted(all_objs, reverse=True) if o.endswith(".mp4")][:5]
-    if recent_objs:
-        recent_df = pd.DataFrame({
-            "Object Key": recent_objs,
-            "Transcode": ["H.264 480p"] * len(recent_objs)
-        })
-        st.dataframe(recent_df, use_container_width=True, hide_index=True)
+    recent_rows = "".join([
+        f'<tr><td style="font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; color: rgba(235,235,245,0.8);">{r}</td><td style="text-align: right;"><span class="table-tag">480p Ready</span></td></tr>'
+        for r in recent_files
+    ]) if recent_files else '<tr><td colspan="2" style="color: rgba(235,235,245,0.4);">Loading uploads...</td></tr>'
 
-st.markdown(f"""
-<div style="text-align: center; color: #86868b; font-size: 0.75rem; margin-top: 24px;">
-    Updated {datetime.now().strftime('%H:%M:%S')} • Auto-refreshes every 3 seconds
+    st.markdown(
+        f"""
+    <div class="apple-card">
+        <div class="subhead" style="margin-bottom: 12px;">Recent GCS 480p Deliverables</div>
+        <table class="apple-table">
+            <thead>
+                <tr>
+                    <th>GCS Object Key</th>
+                    <th style="text-align: right;">Format</th>
+                </tr>
+            </thead>
+            <tbody>
+                {recent_rows}
+            </tbody>
+        </table>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+# -----------------------------------------------------------------------------
+# Footer
+# -----------------------------------------------------------------------------
+st.markdown(
+    f"""
+<div style="text-align: center; font-size: 11px; color: rgba(235, 235, 245, 0.3); margin-top: 20px; letter-spacing: 0.02em;">
+    Ultra-responsive Rolling 30-Download ETA Algorithm • Zero-Reload Fluid Updates • Last Ping: {datetime.now().strftime('%H:%M:%S')}
 </div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-time.sleep(3)
+time.sleep(2)
 st.rerun()
