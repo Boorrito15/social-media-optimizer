@@ -1,100 +1,74 @@
 # Changelog
 
-All notable changes to this project are documented here, grouped by logical
-feature areas. This file is maintained alongside the code so collaborators —
-new and existing — can see what moved and why.
+Reverse-chronological timeline (newest first) of committed changes, extracted
+from the GitHub repository history. Each day groups its commits with the exact
+ISO-8601 time and author.
 
-The project is currently pre-release: all changes appear under
-**`[Unreleased]`** until the pipeline reaches a stable first release.
-
-## [Unreleased]
-
-### Added
-- **`utils/config.py`** — centralised, typed environment/config loader
-  (string/int/float/bool/path getters, grouped GCP/GCS/Gemini/video accessors,
-  service-account key resolution that prefers the project key over a stale
-  ambient variable).
-- **`src/ingestion/`** (Phase 2 — data ingestion & cleaning)
-  - `clean.py`: maps vendor `NZR - ...` columns to a stable schema, filters to
-    short-form posts on target platforms, removes duplicate links (keeps the
-    most-engaged representative), normalises types and drops blank rows.
-  - `main.py`: CLI that always writes **both** `posts_clean.csv` and
-    `posts_clean.parquet`.
-  - `summary.py`: per-stage run summary (rows removed per step), JSON-exportable.
-- **`src/video/`** (Phase 3 — video pipeline)
-  - `download.py`: per-platform resolver + `yt-dlp` downloader; platform↔name
-    mapping and `media_id_from_url` extraction; browser-cookie authentication.
-  - `upload.py`: `resolve → download → 480p transcode → GCS upload`
-    orchestration; idempotent skip; crash protection.
-  - `index.py`: incremental index shards, cumulative `videos_index.parquet`,
-    log shipping, and backfill from existing GCS objects.
-  - `main.py`: CLI with platform/limit/dry-run/transcode/concurrency/run-id/log
-    /consolidate/cookies options.
-- **`utils/gcs.py`** — GCS upload via `google-cloud-storage` (with `gsutil`
-  fallback), `object_exists`, `list_existing_objects`, `sha256_file`,
-  skip-if-exists, retries.
-- **`utils/ffmpeg.py`** — 480p transcode profile builder (H.264/AV1, 96k audio,
-  ～30 FPS cap, `yuv420p`, CRF + VBV rate cap) and `ffprobe` duration probe.
-- **Tests** — `tests/test_ingestion.py` and `tests/test_video.py`.
-
-### Optimised
-- **Fast GCS skip** — the video pipeline now does **one** `list_existing_objects()`
-  call at startup to load all already-uploaded videos into memory, then skips any
-  post whose object already exists (O(1) lookup) instead of a per-video network
-  round-trip. This makes re-runs/resumes and cross-machine sharing dramatically
-  cheaper and faster.
-- **Parallel/concurrent scraping** — `--concurrency N` / `VIDEO_CONCURRENCY`
-  processes posts in parallel (YouTube stays serial due to throttling).
-- **Rate-limit control** — `VIDEO_REQUEST_DELAY` paces anonymous requests.
-
-### Security / hardening
-- Git-ignore raw data + generated outputs: `data/raw/`, `data/processed/`,
-  `data/videos/`, plus global `*.csv`, `*.tsv`, `*.jsonl`, `*.parquet`, `*.log`,
-  cookies files, `.env`, and `config/*.json` (service-account keys).
-- GCS service-account credentials and `.env` are never committed.
-
-### Fixed
-- **Broken import** — `src/video/upload.py` referenced `utils.hashing`, which
-  does not exist; `sha256_file` lives in `utils.gcs`. The import now points to
-  `utils.gcs`, so the pipeline imports and runs correctly (all tests pass).
-
-### Removed
-- Data files purged from **all** git history (raw + processed CSV/Parquet) so
-  they exist only locally (and in GCS), not in version control.
+Contributors referenced here:
+- **Alden** (aldenwahsono / Alden Wahsono)
+- **Leon** (Leon Helfinger / leonhelfinger)
+- **Robert** (Robert Safin / Robert-Safin)
 
 ---
 
-## History (by contributor)
+## 2026-08-27
 
-Practical change history condensed from `git log`, roughly oldest → newest.
+- **15:48** (Alden) `b2c9cfe` — docs: overhaul README + add CHANGELOG
+- **15:35** (Alden) `1bc3e52` — fix(video): import `sha256_file` from `utils.gcs` not `utils.hashing`
+- **15:12** (Alden) `d67f22c` — chore: harden gitignore against data/credentials/artifacts
+- **15:08** (Leon) `1a676d6` — Merge pull request #5 from `Boorrito15/cookie-layer`
+- **15:07** (Leon) `56ff0f5` — merge: resolve conflicts with origin/main keeping cookie layer
+- **14:53** (Leon) `4b1b10a` — feat(video): browser cookie authentication + desktop headers
+  (`--cookies`, `--cookies-from-browser`, `_DEFAULT_HTTP_HEADERS`, `_build_ydl_opts`,
+  `ytdlp_cookies_from_browser`, unit tests)
+- **14:37** (Alden) `9701ce5` — chore: ignore generated/raw datasets (`data/*`, `*.parquet`)
+- **13:51** (Alden) `2a078e5` — Merge pull request #4 from `Boorrito15/fix/autoskip-video-ingestion`
+- **13:06** (Leon) `1370afc` — feat: skip-existing logic + `list_existing_objects` (fast idempotent re-runs)
+- **11:34** (Alden) `bc8f7c1` — docs: teammate scraping setup (clone + manual GCS key/.env)
+- **10:07** (Alden) `2a6d13c` — Merge pull request #3 from `Boorrito15/feature/video-scraper`
+- **10:06** (Alden) `8d5cf92` — Merge pull request #2 from `Boorrito15/feature/ingestion-cleaning`
+- **10:06** (Alden) `8659c0f` — Merge pull request #1 from `Boorrito15/chore/project-config`
+- **09:52** (Alden) `80c1912` — test(video): resolver, download, pipeline + index
+- **09:52** (Alden) `fc12f4a` — feat(video): CLI entrypoint
+- **09:52** (Alden) `e6f3f76` — feat(video): `resolve → download → 480p → GCS` orchestration
+- **09:52** (Alden) `fd0e148` — feat(video): index shards + cumulative registry + log shipping
+- **09:52** (Alden) `cfb5dfd` — feat(video): per-platform resolver + `yt-dlp` downloader
+- **09:52** (Alden) `4606b9b` — feat(utils): GCS upload + ffmpeg 480p transcode helpers
+- **09:51** (Alden) `00f29dc` — test(ingestion): cleaning + dedup + summary
+- **09:51** (Alden) `c1570b8` — feat(ingestion): CLI entrypoint (CSV + Parquet)
+- **09:51** (Alden) `66b2d2f` — feat(ingestion): run summary with per-stage counts
+- **09:51** (Alden) `f0c151b` — feat(ingestion): cleaning/normalisation for master dataset
+- **09:51** (Alden) `81285be` — feat(core): config loader + package init
+- **09:50** (Alden) `7bb431f` — docs: project setup, GCP buckets, module layout
+- **09:50** (Alden) `e654512` — chore(deps): runner deps + tighten gitignore for credentials
 
-### Project bootstrap
-- Initial project structure and notebooks.
-- `requirements.txt`, `.gitignore`, `.env.example` with GCP bucket config.
+## 2026-08-26
 
-### Contributor: **Alden Wahsono**
-- Phase 2 ingestion: `src/ingestion/` (clean, CLI, summary) + tests.
-- Phase 3 video pipeline: `utils/gcs.py`, `utils/ffmpeg.py`, `src/video/`
-  (download, upload, index, main) + tests.
-- Incremental index + cumulative `videos_index.parquet` + log shipping.
-- Data purge from git history + hardened `.gitignore`.
-- Fixed the `utils.hashing` broken import (see above).
+- **14:50** (Robert) `b556d6e` — update notebook
+- **13:54** (Robert) `549f74d` — Rename `Untitled.ipynb` → `rob.ipynb`
+- **13:54** (Robert) `45f09aa` — Delete `notebooks/rob.ipynb`
+- **13:53** (Robert) `f005b46` — Add files via upload
 
-### Contributor: **Leon Helfinger**
-- PR #4 — fast skip-existing + GCS object listing utility
-  (`list_existing_objects`) for cheap idempotent re-runs.
-- PR #5 — browser cookie authentication and realistic desktop headers:
-  `--cookies` / `--cookies-from-browser` CLI flags,
-  `_DEFAULT_HTTP_HEADERS`, `_build_ydl_opts` dynamic cookie injection,
-  `ytdlp_cookies_from_browser()` config getter, plus unit tests.
+## 2026-08-25
 
-### Contributor: **Robert Safin**
-- Notebook / dataset file maintenance.
+- **14:35** (Alden) `404de03` — chore: set up GCP bucket in `.env.example`
+- **13:31** (Alden) `b8ecd44` — chore: initial `requirements.txt`
+- **13:29** (Alden) `73b92ca` — chore: added `.gitignore`
+- **13:27** (Alden) `c844be8` — chore: dedicated notebooks per team member
+- **13:21** (Alden) `b36611e` — Initial project structure
 
 ---
 
-## Test status
+## Summary of work by area
 
-```bash
-python -m pytest tests/ -q   # currently 27 passing
-```
+| Area | Status |
+| ---- | ------ |
+| Data ingestion & cleaning (Phase 2) | ✅ `src/ingestion/` |
+| Video pipeline — scrape → 480p → GCS (Phase 3) | ✅ `src/video/` |
+| Fast GCS skip / idempotency (Leon PR #4) | ✅ |
+| Browser-cookie auth for scraping (Leon PR #5) | ✅ |
+| Index / manifest / log shipping | ✅ |
+| Git hygiene — data + credentials ignored | ✅ |
+| Data files purged from history | ✅ |
+
+**Tests:** `python -m pytest tests/ -q` — currently **27 passing**.
