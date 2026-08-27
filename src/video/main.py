@@ -84,6 +84,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path to a log file to upload to GCS as logs/<run_id>.log.",
     )
     parser.add_argument(
+        "--cookies",
+        type=str,
+        default=None,
+        help="Path to cookies.txt file for authentication.",
+    )
+    parser.add_argument(
+        "--cookies-from-browser",
+        type=str,
+        default=None,
+        help="Load cookies directly from browser (e.g. chrome, safari, firefox, brave).",
+    )
+    parser.add_argument(
         "--no-skip-existing",
         action="store_true",
         help="Do not skip videos that already exist in GCS.",
@@ -129,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
         concurrency=args.concurrency,
         run_id=args.run_id,
         skip_existing=not args.no_skip_existing,
+        cookies=args.cookies,
+        cookies_from_browser=args.cookies_from_browser,
     )
     print("\n" + str(result))
 
