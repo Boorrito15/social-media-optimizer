@@ -25,9 +25,9 @@ from urllib.parse import urlparse
 from utils.config import video_output_dir, video_request_delay, ytdlp_cookies
 
 # Platforms this resolver has an automated (yt-dlp) path for.
-SUPPORTED_EXTRACTORS = {"youtube", "tiktok"}
+SUPPORTED_EXTRACTORS = {"youtube", "tiktok", "instagram", "facebook"}
 # Platforms that exist in the dataset but are not yet automated.
-PLANNED_EXTRACTORS = {"instagram", "facebook"}
+PLANNED_EXTRACTORS: set[str] = set()
 
 # Map the dataset's uppercase platform codes to resolver platform names.
 PLATFORM_CODE_MAP = {
@@ -52,14 +52,15 @@ def media_id_from_url(url: str, platform: str | None = None) -> str:
       - IG / FB  -> the trailing path segment
     """
     platform = platform or _platform_from_url(url)
+    clean_url = str(url).split("?")[0].split("#")[0]
     if platform == "youtube":
         m = re.search(r"[?&]v=([A-Za-z0-9_-]{6,})", url) or re.search(
             r"youtu\.be/([A-Za-z0-9_-]{6,})", url
         )
         if m:
             return m.group(1)
-    segs = [s for s in url.rstrip("/").split("/") if s]
-    return segs[-1] if segs else url
+    segs = [s for s in clean_url.rstrip("/").split("/") if s]
+    return segs[-1] if segs else clean_url
 
 
 def published_at_from_info(info: dict) -> str | None:
@@ -121,14 +122,15 @@ def _platform_from_url(url: str) -> str | None:
 
 
 def _extract_id(url: str, platform: str) -> str:
+    clean_url = str(url).split("?")[0].split("#")[0]
     if platform == "youtube":
         m = re.search(r"[?&]v=([A-Za-z0-9_-]{6,})", url) or re.search(
             r"youtu\.be/([A-Za-z0-9_-]{6,})", url
         )
-        return m.group(1) if m else url.rsplit("/", 1)[-1].split("?")[0]
-    # TikTok & IG: last non-empty path segment.
-    segs = [s for s in url.rstrip("/").split("/") if s]
-    return segs[-1] if segs else url
+        return m.group(1) if m else clean_url.rsplit("/", 1)[-1]
+    # TikTok, IG, FB: last non-empty path segment.
+    segs = [s for s in clean_url.rstrip("/").split("/") if s]
+    return segs[-1] if segs else clean_url
 
 
 def _info_to_resolved(platform: str, url: str, info: dict) -> ResolvedMedia:
