@@ -238,3 +238,10 @@ def test_run_pipeline_direct_skips_existing_objects(monkeypatch):
     # Only the new video should have been sent to _process_one
     assert processed_posts == ["https://www.youtube.com/watch?v=new_video"]
 
+def test_build_ydl_opts_with_browser_cookies():
+    from src.video.download import _build_ydl_opts
+
+    opts = _build_ydl_opts(cookies_from_browser="chrome")
+    assert opts.get("cookiesfrombrowser") == ("chrome",)
+    assert "User-Agent" in opts.get("http_headers", {})
+

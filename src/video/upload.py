@@ -1,22 +1,16 @@
-"""Video pipeline orchestration: resolve -> download -> 480p transcode -> GCS.
+"""Orchestrates video scraping, transcoding, GCS upload and manifest writing.
 
-Reads the cleaned posts (``posts_clean.parquet``), and for each short-form
-post that has a resolvable source video, produces a 480p MP4 and uploads it
-to GCS under ``<VIDEO_GCS_PREFIX>/<platform>/<post_id>.mp4``.
-
-Every run emits two artifacts to GCS (snappy-compressed Parquet):
-
-* a **manifest** — one row per post attempted, with the GCS path, publish
-  timestamp, duration, source metadata and the SHA-256 of the *uploaded* file;
-* a **status sheet** — specifically the *failed* uploads, with the reason, so
-  you always have a durable record of what did not make it and why.
-
-Design goals:
-* **Idempotent** — finished videos (and already-downloaded/transcoded files)
-  are skipped, so the job can be re-run / run overnight safely.
-* **Tolerant** — a failing post is recorded, never aborts the run.
-* **GCP-first** — videos, manifest and status sheets all land in GCS, not the
-  local machine (local disk is only a transient staging area).
+Flow:
+    1. Read ``data/processed/posts_clean.parquet`` (or CSV).
+    2. Filter to supported video platforms (or user-specified ``--platforms``).
+    3. Concurrently or serially:
+        a. Resolve media metadata via yt-dlp.
+        b. Download source to ``data/videos/<platform>/<id>.<ext>``.
+        c. Transcode to standard 480p H.264 / AAC (unless ``--no-transcode``).
+        d. Upload to ``gs://<bucket>/videos/<platform>/<id>.mp4``.
+        e. Periodically append to an index shard in GCS so long runs leave a
+           durable trail if interrupted.
+    4. Write a consolidated manifest Parquet file to ``gs://<bucket>/manifests/``.
 """
 
 from __future__ import annotations
@@ -36,7 +30,8 @@ from utils.config import (
     video_gcs_prefix,
     video_output_dir,
 )
-from utils.gcs import list_existing_objects, object_exists, sha256_file, upload_file
+from utils.gcs import list_existing_objects, object_exists, upload_file
+from utils.hashing import sha256_file
 from src.video.download import (
     SUPPORTED_EXTRACTORS,
     MediaResolutionError,
@@ -50,9 +45,29 @@ from src.video.download import (
 from src.video.index import append_failed_sheet, append_index_shard
 
 
+# Target schema for both the consolidated manifest and index shards.
+_MANIFEST_SCHEMA = [
+    "platform",
+    "post_id",
+    "url",
+    "status",
+    "gcs_path",
+    "published_at",
+    "duration_s",
+    "title",
+    "sha256",
+    "size_bytes",
+    "source_codec",
+    "source_resolution",
+    "error",
+    "processed_at",
+    "transcode_args",
+]
+
+
 @dataclass
 class VideoJobResult:
-    """Aggregated outcome of a pipeline run."""
+    """Summary of a video scraping / transcode / upload run."""
 
     attempted: int = 0
     uploaded: int = 0
@@ -62,46 +77,30 @@ class VideoJobResult:
     failures: list[str] = field(default_factory=list)
     manifest_path: str | None = None
     status_sheet_path: str | None = None
-    run_id: str | None = None
     index_shards: list[str] = field(default_factory=list)
+    run_id: str | None = None
 
     def __str__(self) -> str:
         lines = [
-            "=" * 50,
-            "VIDEO UPLOAD SUMMARY",
-            "=" * 50,
-            f"Run id                        : {self.run_id or 'n/a'}",
-            f"Posts attempted               : {self.attempted}",
-            f"Uploaded to GCS               : {self.uploaded}",
-            f"Skipped (already in GCS)      : {self.skipped_existing}",
-            f"Unsupported platform (IG/FB)  : {self.unsupported}",
-            f"Failed                        : {self.failed}",
+            "Video pipeline summary:",
+            f"  Attempted:        {self.attempted:,}",
+            f"  Uploaded:         {self.uploaded:,}",
+            f"  Skipped existing: {self.skipped_existing:,}",
+            f"  Unsupported:      {self.unsupported:,}",
+            f"  Failed:           {self.failed:,}",
         ]
         if self.manifest_path:
-            lines.append("-" * 50)
-            lines.append(f"Manifest : {self.manifest_path}")
-        if self.status_sheet_path and self.failed:
-            lines.append(f"Failures : {self.status_sheet_path}")
+            lines.append(f"  Manifest:         {self.manifest_path}")
+        if self.status_sheet_path:
+            lines.append(f"  Failed status:    {self.status_sheet_path}")
         if self.index_shards:
-            lines.append(f"Index shards: {len(self.index_shards)} written to GCS")
-        if self.failures:
-            lines.append("-" * 50)
-            lines.append("Failed URLs:")
-            lines.extend(f"  - {f}" for f in self.failures[:20])
-        lines.append("=" * 50)
+            lines.append(f"  Index shards:     {len(self.index_shards)} written to GCS")
         return "\n".join(lines)
 
 
-# Columns that every manifest/status record carries.
-_MANIFEST_SCHEMA = [
-    "platform", "post_id", "url", "status", "gcs_path", "published_at",
-    "duration_s", "title", "sha256", "size_bytes", "source_codec",
-    "source_resolution", "error", "processed_at", "transcode_args",
-]
-
-
 def _gcs_object_name(post_id: str, platform: str) -> str:
-    return f"{video_gcs_prefix().strip('/')}/{platform.lower()}/{post_id}.mp4"
+    prefix = video_gcs_prefix().strip("/")
+    return f"{prefix}/{platform}/{post_id}.mp4"
 
 
 def _manifest_object_name() -> str:
@@ -123,6 +122,8 @@ def _process_one(
     out_dir: str | Path | None = None,
     ffmpeg_threads: int = 0,
     existing_objects: set[str] | None = None,
+    cookies: str | None = None,
+    cookies_from_browser: str | None = None,
 ) -> dict:
     """Process a single post row, returning a manifest record dict."""
     url = row.get("url")
@@ -172,7 +173,12 @@ def _process_one(
 
     # --- resolve ---
     try:
-        media: ResolvedMedia = resolve(url, platform=platform_name)
+        media: ResolvedMedia = resolve(
+            url,
+            platform=platform_name,
+            cookies=cookies,
+            cookies_from_browser=cookies_from_browser,
+        )
     except MediaResolutionError as exc:
         rec["status"] = "failed"
         rec["error"] = f"resolve: {exc}"
@@ -187,7 +193,19 @@ def _process_one(
     rec["source_resolution"] = str(res) if res is not None else None
 
     # --- download ---
-    local = download(media, out_dir=out_dir)
+    try:
+        local = download(
+            media,
+            out_dir=out_dir,
+            cookies=cookies,
+            cookies_from_browser=cookies_from_browser,
+        )
+    except Exception as exc:
+        rec["status"] = "failed"
+        rec["error"] = f"download: {exc}"
+        print(f"[video] download failed [{platform_code}] {post_id}: {exc}")
+        return rec
+
     if local is None:
         rec["status"] = "failed"
         rec["error"] = "download produced no file"
@@ -287,6 +305,8 @@ def run_pipeline(
     run_id: str | None = None,
     index_flush_every: int = 20,
     skip_existing: bool = True,
+    cookies: str | None = None,
+    cookies_from_browser: str | None = None,
 ) -> VideoJobResult:
     """Run the pipeline over a cleaned posts dataframe and aggregate results.
 
@@ -405,6 +425,8 @@ def run_pipeline(
                 transcode=transcode_to_480p_enabled,
                 ffmpeg_threads=ffmpeg_threads,
                 existing_objects=existing_objects,
+                cookies=cookies,
+                cookies_from_browser=cookies_from_browser,
             ))
     else:
         with ThreadPoolExecutor(max_workers=concurrency) as ex:
@@ -412,7 +434,9 @@ def run_pipeline(
                 ex.submit(_process_one, row, bucket=bucket, dry_run=dry_run,
                           transcode=transcode_to_480p_enabled,
                           ffmpeg_threads=ffmpeg_threads,
-                          existing_objects=existing_objects)
+                          existing_objects=existing_objects,
+                          cookies=cookies,
+                          cookies_from_browser=cookies_from_browser)
                 for row in rows
             ]
             # Collect results linearly so record ordering + summary stay simple.

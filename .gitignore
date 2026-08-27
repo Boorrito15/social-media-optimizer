@@ -26,6 +26,8 @@ data/videos/
 .env
 .env.*
 !.env.example
+cookies.txt
+*.cookies
 
 # Service account keys / credentials JSON (never commit these)
 *.json

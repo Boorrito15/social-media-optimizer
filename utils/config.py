@@ -178,6 +178,10 @@ def ytdlp_cookies() -> str | None:
     return get_optional("YTDLP_COOKIES")
 
 
+def ytdlp_cookies_from_browser() -> str | None:
+    return get_optional("YTDLP_COOKIES_BROWSER")
+
+
 def video_concurrency() -> int:
     return get_int("VIDEO_CONCURRENCY", 1)
 
