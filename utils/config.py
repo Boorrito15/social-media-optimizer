@@ -11,13 +11,25 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-# Project root = two levels up from this file (utils/ -> project root).
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-# Load .env if present (values already in os.environ take precedence).
-load_dotenv(PROJECT_ROOT / ".env", override=False)
+try:
+    from dotenv import load_dotenv
+    # Project root = two levels up from this file (utils/ -> project root).
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+except ImportError:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    env_file = PROJECT_ROOT / ".env"
+    if env_file.is_file():
+        try:
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    k, v = k.strip(), v.strip().strip("'\"")
+                    if k not in os.environ:
+                        os.environ[k] = v
+        except Exception:
+            pass
 
 
 def _dotenv_lines() -> list[str]:
