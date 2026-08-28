@@ -18,6 +18,7 @@ Options are documented with ``--help``.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -45,9 +46,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--platforms",
-        type=str,
+        nargs="+",
         default=None,
-        help="Comma-separated platforms to process (e.g. youtube,tiktok). Default: all.",
+        help="Platforms to process (space or comma-separated, e.g. facebook instagram). Default: all.",
     )
     parser.add_argument(
         "--limit",
@@ -70,6 +71,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help=f"Number of parallel workers (default: VIDEO_CONCURRENCY={video_concurrency()}).",
+    )
+    parser.add_argument(
+        "--task-index",
+        type=int,
+        default=int(os.getenv("CLOUD_RUN_TASK_INDEX", "0")),
+        help="Task index for Cloud Run job sharding (default: CLOUD_RUN_TASK_INDEX or 0).",
+    )
+    parser.add_argument(
+        "--task-count",
+        type=int,
+        default=int(os.getenv("CLOUD_RUN_TASK_COUNT", "1")),
+        help="Total task count for Cloud Run job sharding (default: CLOUD_RUN_TASK_COUNT or 1).",
     )
     parser.add_argument(
         "--run-id",
@@ -113,16 +126,25 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.dry_run:
         creds_path = service_account_credentials()
-        if creds_path is None or not creds_path.is_file():
-            print(
-                f"\n[ERROR] Service account key file not found: {creds_path}\n"
-                f"Please place your GCP service account JSON key in '{creds_path or 'config/le-wagon-2303-service-account.json'}'\n"
-                f"or update GOOGLE_APPLICATION_CREDENTIALS in your .env file.\n"
-            )
-            return 1
+        if creds_path and creds_path.is_file():
+            print(f"[video] Authenticating with service account key: {creds_path}")
+        else:
+            print("[video] Using GCP Application Default Credentials (ADC)")
 
     df = load_posts(args.data)
-    platforms = [p.strip() for p in args.platforms.split(",")] if args.platforms else None
+    if args.task_count > 1:
+        if args.task_index < 0 or args.task_index >= args.task_count:
+            print(f"[ERROR] Invalid --task-index {args.task_index} for --task-count {args.task_count}")
+            return 1
+        orig_len = len(df)
+        df = df[df.reset_index().index % args.task_count == args.task_index]
+        print(f"[video] Task shard {args.task_index}/{args.task_count}: assigned {len(df):,} of {orig_len:,} posts")
+
+    platforms = (
+        [p.strip() for item in args.platforms for p in item.split(",") if p.strip()]
+        if args.platforms
+        else None
+    )
 
     print(
         f"[video] pipeline over {len(df):,} posts "

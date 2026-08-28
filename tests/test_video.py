@@ -261,3 +261,91 @@ def test_build_ydl_opts_with_browser_cookies():
     assert opts.get("cookiesfrombrowser") == ("chrome",)
     assert "User-Agent" in opts.get("http_headers", {})
 
+
+# --- main.py task sharding and ADC support -----------------------------------
+
+def test_main_parse_args_task_sharding_defaults(monkeypatch):
+    from src.video import main as main_mod
+
+    monkeypatch.delenv("CLOUD_RUN_TASK_INDEX", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_TASK_COUNT", raising=False)
+    args = main_mod.parse_args([])
+    assert args.task_index == 0
+    assert args.task_count == 1
+
+
+def test_main_parse_args_task_sharding_env_vars(monkeypatch):
+    from src.video import main as main_mod
+
+    monkeypatch.setenv("CLOUD_RUN_TASK_INDEX", "3")
+    monkeypatch.setenv("CLOUD_RUN_TASK_COUNT", "8")
+    args = main_mod.parse_args([])
+    assert args.task_index == 3
+    assert args.task_count == 8
+
+
+def test_main_parse_args_task_sharding_cli_flags(monkeypatch):
+    from src.video import main as main_mod
+
+    monkeypatch.setenv("CLOUD_RUN_TASK_INDEX", "0")
+    monkeypatch.setenv("CLOUD_RUN_TASK_COUNT", "1")
+    args = main_mod.parse_args(["--task-index", "2", "--task-count", "5"])
+    assert args.task_index == 2
+    assert args.task_count == 5
+
+
+def test_main_task_sharding_partitions_dataframe(monkeypatch):
+    from src.video import main as main_mod
+
+    sample_df = pd.DataFrame({
+        "url": [f"https://www.facebook.com/reel/{i}/" for i in range(10)],
+        "platform": ["FB"] * 10,
+    })
+    monkeypatch.setattr(main_mod, "load_posts", lambda *a, **k: sample_df.copy())
+    monkeypatch.setattr(main_mod, "service_account_credentials", lambda: None)
+
+    passed_dfs = []
+    monkeypatch.setattr(main_mod, "run_pipeline", lambda df, **k: passed_dfs.append(df) or MagicMock(failed=0))
+
+    from unittest.mock import MagicMock
+
+    exit_code = main_mod.main(["--dry-run", "--task-index", "1", "--task-count", "4"])
+    assert exit_code == 0
+    assert len(passed_dfs) == 1
+    # Modulo partition: index % 4 == 1 -> rows 1, 5, 9
+    assert list(passed_dfs[0].index) == [1, 5, 9]
+    assert len(passed_dfs[0]) == 3
+
+
+def test_main_task_sharding_invalid_task_index_returns_error(monkeypatch):
+    from src.video import main as main_mod
+
+    sample_df = pd.DataFrame({"url": ["https://fb.com/1"], "platform": ["FB"]})
+    monkeypatch.setattr(main_mod, "load_posts", lambda *a, **k: sample_df)
+    monkeypatch.setattr(main_mod, "service_account_credentials", lambda: None)
+
+    # task_index 5 with task_count 4 is out of bounds
+    exit_code = main_mod.main(["--dry-run", "--task-index", "5", "--task-count", "4"])
+    assert exit_code == 1
+
+
+def test_main_adc_fallback_allows_execution_when_no_credentials_file(monkeypatch):
+    from unittest.mock import MagicMock
+    from src.video import main as main_mod
+
+    sample_df = pd.DataFrame({"url": ["https://www.youtube.com/watch?v=adc_test"], "platform": ["YT"]})
+    monkeypatch.setattr(main_mod, "load_posts", lambda *a, **k: sample_df)
+    monkeypatch.setattr(main_mod, "service_account_credentials", lambda: None)
+
+    pipeline_called = []
+    monkeypatch.setattr(
+        main_mod,
+        "run_pipeline",
+        lambda df, **k: pipeline_called.append(True) or MagicMock(failed=0, run_id="test_adc"),
+    )
+
+    exit_code = main_mod.main([])
+    assert exit_code == 0
+    assert pipeline_called == [True]
+
+
