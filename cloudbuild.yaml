@@ -1,0 +1,10 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: [
+    'build',
+    '-f', 'Dockerfile.scraper',
+    '-t', 'asia-southeast2-docker.pkg.dev/le-wagon-2303/sm-optimizer-repo/meta-video-scraper:latest',
+    '.'
+  ]
+images:
+- 'asia-southeast2-docker.pkg.dev/le-wagon-2303/sm-optimizer-repo/meta-video-scraper:latest'

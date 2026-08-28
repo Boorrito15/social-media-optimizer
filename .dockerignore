@@ -1,0 +1,14 @@
+.git
+.venv
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+data/raw/
+data/videos/
+.agents/
+.env
