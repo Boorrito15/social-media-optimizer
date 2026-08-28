@@ -39,7 +39,6 @@ All outputs are uploaded to regional standard buckets in `asia-southeast2`:
 - **[`Dockerfile.scraper`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/Dockerfile.scraper)**: Lightweight Dockerfile for Cloud Run Jobs scraper.
 - **[`requirements-scraper.txt`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/requirements-scraper.txt)**: Minimal scraper runtime dependencies.
 - **[`src/video/main.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/main.py)**: Scraper entrypoint with ADC fallback and task sharding.
-- **[`src/video/dynamic_pool.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/dynamic_pool.py)**: Multi-platform worker pool supervisor.
 - **[`src/video/upload.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/upload.py)**: Resolution, download, transcode, GCS upload, and disk cleanup.
 - **[`src/video/index.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/index.py)**: Index shard emission to GCS.
 - **[`src/video/web_dashboard.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/web_dashboard.py)**: MinionsScout live web dashboard server.
