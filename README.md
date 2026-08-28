@@ -66,16 +66,50 @@ python -m src.video.main --limit 5 --dry-run
 
 | Flag | Description |
 | ---- | ----------- |
-| `--platforms <a,b>` | Comma-separated platforms to process (youtube, tiktok, instagram, facebook) |
+| `--platforms <a,b>` | Comma-separated or space-separated platforms to process (youtube, tiktok, instagram, facebook) |
 | `--limit N` | Process at most `N` posts (dry-run/scratch work) |
 | `--dry-run` | Trace the pipeline without downloading/transcoding/uploading |
 | `--no-transcode` | Upload the source (original resolution) instead of the 480p |
 | `--concurrency N` | Number of parallel workers (default `VIDEO_CONCURRENCY`) |
+| `--task-index N` | Task index for Cloud Run job sharding (default `CLOUD_RUN_TASK_INDEX` or 0) |
+| `--task-count N` | Total task count for Cloud Run job sharding (default `CLOUD_RUN_TASK_COUNT` or 1) |
 | `--run-id <id>` | Stable id used to name index shards + logs |
 | `--log <file>` | Also upload the run's stdout to `logs/<run_id>.log` |
 | `--consolidate` | Rebuild the cumulative `videos_index.parquet` afterwards |
 | `--cookies <file>` | Path to a Netscape `cookies.txt` for authenticated scraping |
 | `--cookies-from-browser <browser>` | Load cookies from an installed browser (chrome, safari, ...) |
+
+---
+
+## ☁️ Serverless Batch Ingestion with Google Cloud Run Jobs
+
+For high-throughput, parallel scraping without keeping local machines running, the pipeline supports deployment as a serverless **Cloud Run Job**:
+
+### Architecture & Sharding
+- **Deterministic Modulo Sharding**: When deployed with `N` tasks (`--task-count N`), each task processes rows where `row_index % N == task_index`. No centralized queue broker required.
+- **Application Default Credentials (ADC)**: Automatically authenticates via GCP metadata server inside Cloud Run or falls back to service account JSON keys.
+- **Co-located Storage**: Deployed to `asia-southeast2` (Jakarta) alongside the GCS bucket `gs://sm-optimizer-processed` for $0 network egress.
+
+### Building & Deploying
+
+```bash
+# 1) Build container image via Cloud Build / Docker
+gcloud builds submit --config cloudbuild.yaml
+
+# 2) Deploy Cloud Run Job with 10 parallel tasks & 1h timeout limit
+gcloud run jobs create meta-video-scraper-job \
+  --image asia-southeast2-docker.pkg.dev/$PROJECT_ID/sm-optimizer-repo/scraper:latest \
+  --region asia-southeast2 \
+  --tasks 10 \
+  --cpu 1 \
+  --memory 2Gi \
+  --max-retries 1 \
+  --task-timeout 3600s \
+  --set-env-vars GCS_PROCESSED_BUCKET=sm-optimizer-processed,VIDEO_CONCURRENCY=5
+
+# 3) Execute the job
+gcloud run jobs execute meta-video-scraper-job --region asia-southeast2
+```
 
 ---
 
