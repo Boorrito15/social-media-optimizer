@@ -50,3 +50,6 @@ config/*.json
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Agent internals
+.agents/

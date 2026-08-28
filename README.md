@@ -34,6 +34,17 @@ All outputs are uploaded to regional standard buckets in `asia-southeast2`:
 
 ---
 
+## 📂 Code Layout
+
+- **[`Dockerfile.scraper`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/Dockerfile.scraper)**: Lightweight Dockerfile for Cloud Run Jobs scraper.
+- **[`requirements-scraper.txt`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/requirements-scraper.txt)**: Minimal scraper runtime dependencies.
+- **[`src/video/main.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/main.py)**: Scraper entrypoint with ADC fallback and task sharding.
+- **[`src/video/upload.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/upload.py)**: Resolution, download, transcode, GCS upload, and disk cleanup.
+- **[`src/video/index.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/index.py)**: Index shard emission to GCS.
+- **[`src/video/web_dashboard.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/web_dashboard.py)**: MinionsScout live web dashboard server.
+
+---
+
 ## 🚀 Video Pipeline & Automated Multi-Platform Scraping
 
 The pipeline automatically handles short-form video extraction, format normalization, 480p H.264/AAC transcoding via ffmpeg, and GCS ingestion across **all 4 platforms**:
@@ -66,16 +77,52 @@ python -m src.video.main --limit 5 --dry-run
 
 | Flag | Description |
 | ---- | ----------- |
-| `--platforms <a,b>` | Comma-separated platforms to process (youtube, tiktok, instagram, facebook) |
+| `--platforms <a,b>` | Comma-separated or space-separated platforms to process (youtube, tiktok, instagram, facebook) |
 | `--limit N` | Process at most `N` posts (dry-run/scratch work) |
 | `--dry-run` | Trace the pipeline without downloading/transcoding/uploading |
 | `--no-transcode` | Upload the source (original resolution) instead of the 480p |
 | `--concurrency N` | Number of parallel workers (default `VIDEO_CONCURRENCY`) |
+| `--task-index N` | Task index for Cloud Run job sharding (default `CLOUD_RUN_TASK_INDEX` or 0) |
+| `--task-count N` | Total task count for Cloud Run job sharding (default `CLOUD_RUN_TASK_COUNT` or 1) |
 | `--run-id <id>` | Stable id used to name index shards + logs |
 | `--log <file>` | Also upload the run's stdout to `logs/<run_id>.log` |
 | `--consolidate` | Rebuild the cumulative `videos_index.parquet` afterwards |
 | `--cookies <file>` | Path to a Netscape `cookies.txt` for authenticated scraping |
 | `--cookies-from-browser <browser>` | Load cookies from an installed browser (chrome, safari, ...) |
+
+---
+
+## ☁️ Serverless Batch Ingestion with Google Cloud Run Jobs
+
+For high-throughput, parallel scraping without keeping local machines running, the pipeline supports deployment as a serverless **Cloud Run Job**:
+
+### Architecture & Sharding
+- **Deterministic Modulo Sharding**: When deployed with `N` tasks (`--task-count N`), each task processes rows where `index % CLOUD_RUN_TASK_COUNT == CLOUD_RUN_TASK_INDEX` (specifically filtering `df[df.index % CLOUD_RUN_TASK_COUNT == CLOUD_RUN_TASK_INDEX]`). Task indices are determined by the standard Cloud Run environment variables `CLOUD_RUN_TASK_INDEX` (0..N-1) and `CLOUD_RUN_TASK_COUNT` (N).
+- **Application Default Credentials (ADC)**: Automatically authenticates via GCP metadata server inside Cloud Run or falls back to service account JSON keys.
+- **Index Shards & Destination**: Writes 15-column Snappy Parquet shards to `gs://sm-optimizer-processed/manifests/index_shard_<run_id>_<seq:06d>.parquet`.
+- **Co-located Storage**: Deployed to `asia-southeast2` (Jakarta) alongside the GCS bucket `gs://sm-optimizer-processed` for $0 network egress cost.
+- **Scraper Packaging**: Deployed as a lightweight Docker container built using [`Dockerfile.scraper`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/Dockerfile.scraper) and [`requirements-scraper.txt`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/requirements-scraper.txt) (based on `python:3.11-slim` + system `ffmpeg`, ~220 MB).
+
+### Building & Deploying
+
+```bash
+# 1) Build container image via Cloud Build / Docker
+gcloud builds submit --config cloudbuild.yaml
+
+# 2) Deploy Cloud Run Job with 10 parallel tasks & 1h timeout limit
+gcloud run jobs create meta-video-scraper-job \
+  --image asia-southeast2-docker.pkg.dev/$PROJECT_ID/sm-optimizer-repo/meta-video-scraper:latest \
+  --region asia-southeast2 \
+  --tasks 10 \
+  --cpu 1 \
+  --memory 2Gi \
+  --max-retries 1 \
+  --task-timeout 3600s \
+  --set-env-vars GCS_PROCESSED_BUCKET=sm-optimizer-processed,VIDEO_CONCURRENCY=5
+
+# 3) Execute the job
+gcloud run jobs execute meta-video-scraper-job --region asia-southeast2
+```
 
 ---
 

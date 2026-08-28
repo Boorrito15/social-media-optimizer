@@ -16,6 +16,7 @@ Flow:
 from __future__ import annotations
 
 import os
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -97,6 +98,36 @@ class VideoJobResult:
         return "\n".join(lines)
 
 
+def check_disk_space(
+    path: str | Path | None = None,
+    min_free_gb: float = 50.0,
+    strict_min_gb: float = 30.0,
+) -> float:
+    """Check free disk space in GB and enforce safety thresholds."""
+    if "VIDEO_MIN_FREE_DISK_GB" in os.environ and min_free_gb == 50.0:
+        min_free_gb = float(os.environ["VIDEO_MIN_FREE_DISK_GB"])
+    elif min_free_gb == 50.0 and (os.getenv("CLOUD_RUN_JOB") or os.getenv("CLOUD_RUN_TASK_INDEX") or os.getenv("K_SERVICE")):
+        min_free_gb = 0.5
+
+    if "VIDEO_STRICT_MIN_DISK_GB" in os.environ and strict_min_gb == 30.0:
+        strict_min_gb = float(os.environ["VIDEO_STRICT_MIN_DISK_GB"])
+    elif strict_min_gb == 30.0 and (os.getenv("CLOUD_RUN_JOB") or os.getenv("CLOUD_RUN_TASK_INDEX") or os.getenv("K_SERVICE")):
+        strict_min_gb = 0.05
+
+    target_path = Path(path or video_output_dir()).expanduser().resolve()
+    target_path.mkdir(parents=True, exist_ok=True)
+    total, used, free = shutil.disk_usage(target_path)
+    free_gb = free / (1024 ** 3)
+    if free_gb < strict_min_gb:
+        raise RuntimeError(
+            f"Strict disk space safety threshold breached: {free_gb:.2f} GB free "
+            f"(< {strict_min_gb} GB strict minimum). Halting ingestion immediately."
+        )
+    if free_gb < min_free_gb:
+        print(f"[video][warning] Free disk space low: {free_gb:.2f} GB free (target > {min_free_gb} GB)")
+    return free_gb
+
+
 def _gcs_object_name(post_id: str, platform: str) -> str:
     prefix = video_gcs_prefix().strip("/")
     return f"{prefix}/{platform}/{post_id}.mp4"
@@ -123,6 +154,8 @@ def _process_one(
     existing_objects: set[str] | None = None,
     cookies: str | None = None,
     cookies_from_browser: str | None = None,
+    min_free_disk_gb: float = 50.0,
+    strict_min_disk_gb: float = 30.0,
 ) -> dict:
     """Process a single post row, returning a manifest record dict."""
     url = row.get("url")
@@ -170,6 +203,8 @@ def _process_one(
         print(f"[video] already in GCS, skipping: {rec['gcs_path']}")
         return rec
 
+    check_disk_space(out_dir, min_free_gb=min_free_disk_gb, strict_min_gb=strict_min_disk_gb)
+
     # --- resolve ---
     try:
         media: ResolvedMedia = resolve(
@@ -178,7 +213,7 @@ def _process_one(
             cookies=cookies,
             cookies_from_browser=cookies_from_browser,
         )
-    except MediaResolutionError as exc:
+    except Exception as exc:
         rec["status"] = "failed"
         rec["error"] = f"resolve: {exc}"
         print(f"[video] resolve failed [{platform_code}] {post_id}: {exc}")
@@ -191,61 +226,81 @@ def _process_one(
     res = media.info.get("resolution") or media.info.get("height")
     rec["source_resolution"] = str(res) if res is not None else None
 
-    # --- download ---
+    source_local: Path | None = None
+    transcoded_local: Path | None = None
+
     try:
-        local = download(
-            media,
-            out_dir=out_dir,
-            cookies=cookies,
-            cookies_from_browser=cookies_from_browser,
-        )
-    except Exception as exc:
-        rec["status"] = "failed"
-        rec["error"] = f"download: {exc}"
-        print(f"[video] download failed [{platform_code}] {post_id}: {exc}")
-        return rec
-
-    if local is None:
-        rec["status"] = "failed"
-        rec["error"] = "download produced no file"
-        return rec
-
-    # --- transcode to 480p ---
-    if transcode:
-        from utils.ffmpeg import build_480p_profile, transcode_to_480p
-
-        profile = build_480p_profile(threads=ffmpeg_threads)
-        rec["transcode_args"] = " ".join(profile)
-        target = out_dir / platform_name / f"{media.post_id}_480p.mp4"
+        # --- download ---
         try:
-            tr = transcode_to_480p(local, target, profile=profile, overwrite=True)
-            local = tr.output
-            if tr.duration_s:
-                rec["duration_s"] = tr.duration_s
-        except (RuntimeError, FileNotFoundError) as exc:
+            source_local = download(
+                media,
+                out_dir=out_dir,
+                cookies=cookies,
+                cookies_from_browser=cookies_from_browser,
+            )
+        except Exception as exc:
             rec["status"] = "failed"
-            rec["error"] = f"transcode: {exc}"
-            print(f"[video] transcode failed [{platform_code}] {post_id}: {exc}")
+            rec["error"] = f"download: {exc}"
+            print(f"[video] download failed [{platform_code}] {post_id}: {exc}")
             return rec
 
-    rec["size_bytes"] = local.stat().st_size if local.exists() else None
-    try:
-        rec["sha256"] = sha256_file(local)
-    except OSError as exc:
-        rec["sha256"] = None
-        rec["error"] = f"sha256: {exc}"
+        if source_local is None or not source_local.exists():
+            rec["status"] = "failed"
+            rec["error"] = "download produced no file"
+            return rec
 
-    # --- upload to GCS ---
-    try:
-        upload_file(local, bucket=bucket, object_name=obj, dry_run=False)
-        rec["status"] = "uploaded"
-        rec["gcs_path"] = f"gs://{bucket}/{obj}"
-        print(f"[video] uploaded {rec['gcs_path']}")
-    except Exception as exc:
-        rec["status"] = "failed"
-        rec["error"] = f"upload: {exc}"
-        print(f"[video] upload failed [{platform_code}] {post_id}: {exc}")
-    return rec
+        local = source_local
+
+        # --- transcode to 480p ---
+        if transcode:
+            from utils.ffmpeg import build_480p_profile, transcode_to_480p
+
+            profile = build_480p_profile(threads=ffmpeg_threads)
+            rec["transcode_args"] = " ".join(profile)
+            target = out_dir / platform_name / f"{media.post_id}_480p.mp4"
+            try:
+                tr = transcode_to_480p(source_local, target, profile=profile, overwrite=True)
+                transcoded_local = tr.output
+                local = transcoded_local
+                if tr.duration_s:
+                    rec["duration_s"] = tr.duration_s
+                if source_local != transcoded_local:
+                    source_local.unlink(missing_ok=True)
+                    source_local = None
+            except (RuntimeError, FileNotFoundError) as exc:
+                rec["status"] = "failed"
+                rec["error"] = f"transcode: {exc}"
+                print(f"[video] transcode failed [{platform_code}] {post_id}: {exc}")
+                return rec
+
+        rec["size_bytes"] = local.stat().st_size if local.exists() else None
+        try:
+            rec["sha256"] = sha256_file(local)
+        except OSError as exc:
+            rec["sha256"] = None
+            rec["error"] = f"sha256: {exc}"
+
+        # --- upload to GCS ---
+        try:
+            upload_file(local, bucket=bucket, object_name=obj, dry_run=False)
+            rec["status"] = "uploaded"
+            rec["gcs_path"] = f"gs://{bucket}/{obj}"
+            print(f"[video] uploaded {rec['gcs_path']}")
+            local.unlink(missing_ok=True)
+            if local == transcoded_local:
+                transcoded_local = None
+            if local == source_local:
+                source_local = None
+        except Exception as exc:
+            rec["status"] = "failed"
+            rec["error"] = f"upload: {exc}"
+            print(f"[video] upload failed [{platform_code}] {post_id}: {exc}")
+        return rec
+    finally:
+        if source_local is not None and source_local.exists():
+            source_local.unlink(missing_ok=True)
+        if transcoded_local is not None and transcoded_local.exists():
+            transcoded_local.unlink(missing_ok=True)
 
 
 def write_records_to_gcs(
@@ -277,9 +332,14 @@ def write_records_to_gcs(
             print(f"[video][dry-run] would write manifest -> gs://{bucket}/{obj}")
             local.unlink(missing_ok=True)
             return f"gs://{bucket}/{obj}"
-        upload_file(local, bucket=bucket, object_name=obj, dry_run=False)
-        local.unlink(missing_ok=True)
-        return f"gs://{bucket}/{obj}"
+        try:
+            upload_file(local, bucket=bucket, object_name=obj, dry_run=False)
+            return f"gs://{bucket}/{obj}"
+        except Exception as exc:
+            print(f"[video] manifest upload failed: {exc}")
+            return f"gs://{bucket}/{obj}"
+        finally:
+            local.unlink(missing_ok=True)
 
     manifest_obj = _manifest_object_name()
     manifest_path = _write(df, manifest_obj)

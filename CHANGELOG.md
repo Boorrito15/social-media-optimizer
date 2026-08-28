@@ -14,6 +14,12 @@ Contributors referenced here:
 
 ## What changed & why it matters (plain-English summary)
 
+### Serverless Batch Scraping via Google Cloud Run Jobs
+- **Deterministic Modulo Sharding:** Added `--task-index` and `--task-count` flags (with `CLOUD_RUN_TASK_INDEX` / `CLOUD_RUN_TASK_COUNT` env var detection) to seamlessly partition DataFrame batches across parallel cloud workers without central coordination.
+- **Application Default Credentials (ADC):** Scraper pipeline now automatically detects and falls back to GCP ambient metadata authentication in Cloud Run when local service account JSON files are omitted.
+- **Production Containerization:** Created lightweight `Dockerfile.scraper` (~220 MB) with Python 3.11, `yt-dlp`, and hardware-accelerated `ffmpeg`, plus automated Cloud Build configuration (`cloudbuild.yaml`).
+- **Resilience & Watchdog:** Added 60s timeout enforcement to ffmpeg transcoding, robust temp file unlinking on transcode failures, and resilient manifest upload error handling.
+
 ### The project now actually works end-to-end
 The repo went from a bare skeleton to a working pipeline that:
 1. **Reads the raw social-media funnel CSV**, cleans it (standardises the messy
