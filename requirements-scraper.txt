@@ -1,0 +1,8 @@
+yt-dlp
+pandas
+pyarrow
+google-cloud-storage
+python-dotenv
+requests
+certifi
+urllib3

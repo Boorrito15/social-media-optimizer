@@ -51,20 +51,19 @@ def test_gcs_object_name():
 # --- resolve marks unsupported platforms (no network) -----------------------
 
 def test_resolve_unsupported_platform_in_pipeline():
-    # Calling download.resolve on IG should not hit the network; it returns a
-    # tombstone with supported=False.
-    m = resolve("https://www.instagram.com/reel/DJPodLgBQm8/")
+    # Calling download.resolve on unsupported platform returns a tombstone with supported=False.
+    m = resolve("https://vimeo.com/123456789", platform="vimeo")
     assert m.supported is False
-    assert m.platform == "instagram"
+    assert m.platform == "vimeo"
 
 
 # --- _process_one (returns a record dict) -----------------------------------
 
 def test_process_one_unsupported_in_dry_run():
-    row = {"url": "https://www.facebook.com/reel/123/", "platform": "FB"}
+    row = {"url": "https://vimeo.com/123456789", "platform": "vimeo"}
     rec = _process_one(row, bucket="b", dry_run=True)
     assert rec["status"] == "unsupported"
-    assert rec["error"] == "no automated extractor for facebook"
+    assert rec["error"] == "no automated extractor for vimeo"
 
 
 def test_process_one_youtube_dry_run_status_uploaded():
@@ -73,6 +72,22 @@ def test_process_one_youtube_dry_run_status_uploaded():
     assert rec["status"] == "uploaded"
     assert rec["post_id"] == "abcXYZ123"
     assert rec["gcs_path"] == "gs://b/videos/youtube/abcXYZ123.mp4"
+
+
+def test_process_one_instagram_dry_run_status_uploaded():
+    row = {"url": "https://www.instagram.com/reel/DJPodLgBQm8/", "platform": "IG"}
+    rec = _process_one(row, bucket="b", dry_run=True)
+    assert rec["status"] == "uploaded"
+    assert rec["post_id"] == "DJPodLgBQm8"
+    assert rec["gcs_path"] == "gs://b/videos/instagram/DJPodLgBQm8.mp4"
+
+
+def test_process_one_facebook_dry_run_status_uploaded():
+    row = {"url": "https://www.facebook.com/reel/729678446160620/", "platform": "FB"}
+    rec = _process_one(row, bucket="b", dry_run=True)
+    assert rec["status"] == "uploaded"
+    assert rec["post_id"] == "729678446160620"
+    assert rec["gcs_path"] == "gs://b/videos/facebook/729678446160620.mp4"
 
 
 def test_process_one_missing_url_status_skipped():
@@ -106,14 +121,15 @@ def test_run_pipeline_dry_run_aggregates():
                 "https://www.youtube.com/watch?v=aaa111",
                 "https://www.instagram.com/reel/x1/",
                 "https://www.facebook.com/reel/9/",
+                "https://vimeo.com/123/",
             ],
-            "platform": ["YT", "IG", "FB"],
+            "platform": ["YT", "IG", "FB", "vimeo"],
         }
     )
     res = run_pipeline(df, dry_run=True)
-    assert res.attempted == 3
-    assert res.uploaded == 1          # youtube dry-run counts as uploaded
-    assert res.unsupported == 2        # IG + FB
+    assert res.attempted == 4
+    assert res.uploaded == 3          # YT + IG + FB dry-run count as uploaded
+    assert res.unsupported == 1        # vimeo
     assert res.failed == 0
 
 
@@ -244,4 +260,92 @@ def test_build_ydl_opts_with_browser_cookies():
     opts = _build_ydl_opts(cookies_from_browser="chrome")
     assert opts.get("cookiesfrombrowser") == ("chrome",)
     assert "User-Agent" in opts.get("http_headers", {})
+
+
+# --- main.py task sharding and ADC support -----------------------------------
+
+def test_main_parse_args_task_sharding_defaults(monkeypatch):
+    from src.video import main as main_mod
+
+    monkeypatch.delenv("CLOUD_RUN_TASK_INDEX", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_TASK_COUNT", raising=False)
+    args = main_mod.parse_args([])
+    assert args.task_index == 0
+    assert args.task_count == 1
+
+
+def test_main_parse_args_task_sharding_env_vars(monkeypatch):
+    from src.video import main as main_mod
+
+    monkeypatch.setenv("CLOUD_RUN_TASK_INDEX", "3")
+    monkeypatch.setenv("CLOUD_RUN_TASK_COUNT", "8")
+    args = main_mod.parse_args([])
+    assert args.task_index == 3
+    assert args.task_count == 8
+
+
+def test_main_parse_args_task_sharding_cli_flags(monkeypatch):
+    from src.video import main as main_mod
+
+    monkeypatch.setenv("CLOUD_RUN_TASK_INDEX", "0")
+    monkeypatch.setenv("CLOUD_RUN_TASK_COUNT", "1")
+    args = main_mod.parse_args(["--task-index", "2", "--task-count", "5"])
+    assert args.task_index == 2
+    assert args.task_count == 5
+
+
+def test_main_task_sharding_partitions_dataframe(monkeypatch):
+    from src.video import main as main_mod
+
+    sample_df = pd.DataFrame({
+        "url": [f"https://www.facebook.com/reel/{i}/" for i in range(10)],
+        "platform": ["FB"] * 10,
+    })
+    monkeypatch.setattr(main_mod, "load_posts", lambda *a, **k: sample_df.copy())
+    monkeypatch.setattr(main_mod, "service_account_credentials", lambda: None)
+
+    passed_dfs = []
+    monkeypatch.setattr(main_mod, "run_pipeline", lambda df, **k: passed_dfs.append(df) or MagicMock(failed=0))
+
+    from unittest.mock import MagicMock
+
+    exit_code = main_mod.main(["--dry-run", "--task-index", "1", "--task-count", "4"])
+    assert exit_code == 0
+    assert len(passed_dfs) == 1
+    # Modulo partition: index % 4 == 1 -> rows 1, 5, 9
+    assert list(passed_dfs[0].index) == [1, 5, 9]
+    assert len(passed_dfs[0]) == 3
+
+
+def test_main_task_sharding_invalid_task_index_returns_error(monkeypatch):
+    from src.video import main as main_mod
+
+    sample_df = pd.DataFrame({"url": ["https://fb.com/1"], "platform": ["FB"]})
+    monkeypatch.setattr(main_mod, "load_posts", lambda *a, **k: sample_df)
+    monkeypatch.setattr(main_mod, "service_account_credentials", lambda: None)
+
+    # task_index 5 with task_count 4 is out of bounds
+    exit_code = main_mod.main(["--dry-run", "--task-index", "5", "--task-count", "4"])
+    assert exit_code == 1
+
+
+def test_main_adc_fallback_allows_execution_when_no_credentials_file(monkeypatch):
+    from unittest.mock import MagicMock
+    from src.video import main as main_mod
+
+    sample_df = pd.DataFrame({"url": ["https://www.youtube.com/watch?v=adc_test"], "platform": ["YT"]})
+    monkeypatch.setattr(main_mod, "load_posts", lambda *a, **k: sample_df)
+    monkeypatch.setattr(main_mod, "service_account_credentials", lambda: None)
+
+    pipeline_called = []
+    monkeypatch.setattr(
+        main_mod,
+        "run_pipeline",
+        lambda df, **k: pipeline_called.append(True) or MagicMock(failed=0, run_id="test_adc"),
+    )
+
+    exit_code = main_mod.main([])
+    assert exit_code == 0
+    assert pipeline_called == [True]
+
 

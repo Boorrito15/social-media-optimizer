@@ -123,6 +123,7 @@ def transcode_to_480p(
     profile: list[str] | None = None,
     dry_run: bool = False,
     overwrite: bool = False,
+    timeout: float = 60.0,
 ) -> TranscodeResult:
     """Re-encode ``input_path`` to a 480p H.264/AAC file at ``output_path``.
 
@@ -133,6 +134,7 @@ def transcode_to_480p(
     profile : complete ffmpeg output args; defaults to ``build_480p_profile``.
     dry_run : only print the command without executing.
     overwrite : allow overwriting an existing ``output_path``.
+    timeout : timeout in seconds for ffmpeg execution (default: 60.0s).
     """
     if not ffmpeg_available():
         raise RuntimeError(
@@ -165,8 +167,31 @@ def transcode_to_480p(
         print(f"[ffmpeg][dry-run] {' '.join(cmd)}")
         return TranscodeResult(output=dst, command=cmd)
 
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        if dst.exists():
+            try:
+                dst.unlink()
+            except OSError:
+                pass
+        raise RuntimeError(
+            f"ffmpeg transcode timed out after {timeout}s: {' '.join(cmd)}"
+        ) from exc
+    except Exception:
+        if dst.exists():
+            try:
+                dst.unlink()
+            except OSError:
+                pass
+        raise
+
     if res.returncode != 0:
+        if dst.exists():
+            try:
+                dst.unlink()
+            except OSError:
+                pass
         raise RuntimeError(
             f"ffmpeg failed (exit {res.returncode}):\n"
             f"{res.stderr.strip()[-1500:]}"
