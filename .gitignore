@@ -21,6 +21,7 @@ data/videos/
 *.png
 *.parquet
 *.csv
+!processed.csv
 *.tsv
 *.jsonl
 
