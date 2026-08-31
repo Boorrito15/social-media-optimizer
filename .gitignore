@@ -12,7 +12,6 @@ env/
 ENV/
 
 # Data & Video Binaries (Do not commit raw videos, frames, or generated datasets)
-data/raw/
 data/processed/
 data/videos/
 *.mp4
