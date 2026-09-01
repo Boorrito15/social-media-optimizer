@@ -42,6 +42,106 @@ All outputs are uploaded to regional standard buckets in `asia-southeast2`:
 - **[`src/video/upload.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/upload.py)**: Resolution, download, transcode, GCS upload, and disk cleanup.
 - **[`src/video/index.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/index.py)**: Index shard emission to GCS.
 - **[`src/video/web_dashboard.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/web_dashboard.py)**: MinionsScout live web dashboard server.
+- **[`src/ml/`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/ml)`**: ML feature pipeline (`features.py`), training (`train.py`), serving (`predict.py`), and metadata auto-inference (`infer.py`).
+- **[`src/api/app.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/api/app.py)**: FastAPI prediction service (see "Predictor UI & API" below).
+- **[`streamlit_app.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/streamlit_app.py)**: Streamlit dashboard — gemini-style **Analyzer** landing page + **Explore** tab.
+- **[`run.sh`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/run.sh)**: One-command launcher for the API + UI.
+
+---
+
+## 🧠 Predictor UI & API
+
+A Streamlit dashboard + FastAPI service with a clean, Gemini-like landing page.
+The user types one free-text **description**; every other piece of metadata
+(title, platform, brand/page, themes, format, tone, duration) is
+**auto-inferred** from that text. The app returns a **make / skip
+verdict**, a **high/low** views & engagement prediction, a **demo revenue**
+projection, and similar historical posts.
+
+> ⚠️ **Money is a demo.** `cost_nzd` is empty for every row (0 / 11,306) in the
+> processed data, so `revenue = views × RPM / 1000` is a rule-of-thumb
+> placeholder, clearly labelled in the UI — not a trained model.
+
+### Quick start
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt -r requirements-api.txt   # adds fastapi/uvicorn & co.
+
+# (optional) retrain models from data/processed/processed.csv
+./run.sh train
+
+# run it all (API on :8000, Streamlit on :8501)
+./run.sh all     # open http://127.0.0.1:8501
+```
+
+Or run the two parts separately:
+
+```bash
+./run.sh api     # FastAPI docs at http://127.0.0.1:8000/docs
+./run.sh app     # Streamlit UI at http://127.0.0.1:8501
+```
+
+### Inputs & auto-inference
+
+The UI ships a single text box. Because the prediction API accepts a bare
+description and auto-fills the rest, a "huge try in the final minute" vs "an
+emotional retirement tribute" produce different platform/page, themes, format,
+tone and duration automatically.
+
+### What the models do
+
+The runtime trains **reproducible XGBoost** models on the same intent as
+`notebooks/rob.ipynb` (TensorFlow isn't part of this environment), on a
+**compact** feature set that the app can actually reconstruct from a free-text
+description (platform, page, content-theme / format / tone multi-hots,
+duration, and hashtag/mention/emoji counts). Training and serving share the
+same feature space — this matters: a user's plain sentence doesn't populate the
+dataset's rich token columns (specific players, campaigns, categories), so a
+model trained on those would collapse every sparse input to a single answer.
+The compact model keeps that from happening:
+
+| Target | Model | Hold-out accuracy | Majority baseline |
+| --- | --- | --- | --- |
+| High/low **views** | XGBoost classifier | ~0.81 | 0.50 |
+| High/low **engagement** | XGBoost classifier | ~0.84 | 0.50 |
+
+The displayed "typical views / engagement" are the **continuers regression
+estimate, anchored to the historical median** of the predicted bucket — so they
+respond to the input while staying within a realistic range of the historical
+data. Similar posts come from a `sentence-transformers` semantic index of
+historical captions.
+
+> ⚠️ **Honest limitation:** discrimination mainly comes from a handful of
+> high-signal ideas ("try", "highlight", "celebration"). Two moderately-low
+> ideas can still land on the same borderline score, because NZ-rugby short
+> form mostly performs well. The verdict and estimates vary with input, but
+> don't expect fine-grained ranking of two similar weak ideas.
+
+### API endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Liveness + model load state |
+| `POST` | `/infer` | Turn a free-text description into full metadata |
+| `POST` | `/predict` | Verdict (auto-infers metadata from a bare description) |
+| `GET` | `/explore/peers` | Representative posts for the Explore tab |
+| `GET` | `/schema` | Canonical platform / page options |
+
+Example (description-only — everything else is inferred):
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -H 'Content-Type: application/json' \
+  -d '{"description":"A huge try in the final minute breaks the deadlock as the crowd erupts"}'
+```
+
+### Regenerating artifacts
+
+Models are written to `data/models/` (git-ignored). Re-run
+`./run.sh train` after updating `data/processed/processed.csv` to refresh
+`bundle.joblib` (pipeline + models + thresholds) and `similar.joblib`
+(embeddings + peer rows).
 
 ---
 

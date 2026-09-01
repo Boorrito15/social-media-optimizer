@@ -1,0 +1,7 @@
+# API + Streamlit runtime extras (in addition to requirements.txt)
+fastapi
+uvicorn
+
+# ML serving
+requests
+joblib
