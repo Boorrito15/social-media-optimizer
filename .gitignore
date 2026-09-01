@@ -25,6 +25,7 @@ data/videos/
 !processed.csv
 *.tsv
 *.jsonl
+*.joblib
 
 # Raw / build artifacts that must stay local
 *.log
