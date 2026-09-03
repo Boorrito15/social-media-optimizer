@@ -13,7 +13,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = Path(__file__).resolve().parent
 
-DEFAULT_PROCESSED_CSV = REPO_ROOT / "processed.csv"
+DEFAULT_PROCESSED_CSV = (
+    REPO_ROOT / "processed.csv"
+    if (REPO_ROOT / "processed.csv").exists()
+    else REPO_ROOT / "data" / "processed" / "processed.csv"
+)
 
 STATE_PATH = MODELS_DIR / "pipeline_state.joblib"
 LINREG_PATH = MODELS_DIR / "linreg.joblib"
@@ -48,3 +52,4 @@ def processed_csv_path() -> Path:
     """Path to ``processed.csv``. Honors ``PROCESSED_CSV`` env override."""
     override = os.environ.get("PROCESSED_CSV")
     return Path(override) if override else DEFAULT_PROCESSED_CSV
+
