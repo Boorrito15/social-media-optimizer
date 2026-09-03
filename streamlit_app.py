@@ -13,6 +13,7 @@ Revamped Architecture (Using models/ directly as specified in models/reference.m
 
 from __future__ import annotations
 
+import functools
 import html
 import json
 import os
@@ -448,6 +449,102 @@ def build_model_dataframe(
 
 
 # ---------------------------------------------------------------------------
+# Helper: Recover the classifier's high/low bin thresholds
+# ---------------------------------------------------------------------------
+# predict_clas bins (views_0/1, engagement_0/1) are defined at train time by
+# _iqr_binned() in models/clas.py:
+#     lo = quantile(0.1); hi = quantile(0.9); iqr = hi - lo
+#     edges = linspace(lo - 1.5*iqr, hi + 1.5*iqr, n_bins + 1)   # n_bins = 2
+# so the bin-0/bin-1 split is the midpoint (q10 + q90) / 2 computed on the
+# IQR-sliced training set. The quadrant split lines must use these same
+# thresholds so the plotted regression point and the classification tier share
+# one yardstick.
+@functools.lru_cache(maxsize=1)
+def classifier_bin_thresholds() -> Dict[str, float]:
+    """Return ``{"views": <split>, "eng": <split>}`` matching ``predict_clas`` bins.
+
+    Recomputed from the same train-time split the classifier used, so it stays
+    correct across retrains. Falls back to hardcoded values derived from the
+    current training data if ``processed.csv`` is unavailable.
+    """
+    fallback = {"views": 217970.0, "eng": 9780.0}
+    try:
+        from models.config import PipelineConfig, processed_csv_path
+        from models.shared.filter import iqr_slice, validity_mask
+        from models.shared.split import split_indices
+
+        cfg = PipelineConfig()
+        df = pd.read_csv(processed_csv_path())
+        df = validity_mask(df)
+        df = iqr_slice(df, cfg.bottom_iqr_percentile, cfg.top_iqr_percentile)
+        df = df.reset_index(drop=True)
+        idx_tr, _ = split_indices(
+            len(df), cfg.test_size, cfg.train_test_random_seed
+        )
+        tr = df.iloc[idx_tr]
+        out: Dict[str, float] = {}
+        for col, key in (("views", "views"), ("engagement", "eng")):
+            lo = float(tr[col].quantile(cfg.bottom_iqr_percentile))
+            hi = float(tr[col].quantile(cfg.top_iqr_percentile))
+            out[key] = (lo + hi) / 2.0
+        return out
+    except Exception:
+        return fallback
+
+
+def _tier_is_high(bin_label: str) -> bool:
+    """True when a ``views_<i>`` / ``engagement_<j>`` label means the high bin."""
+    return str(bin_label).endswith("1") or ("high" in str(bin_label).lower())
+
+
+def _tier_center(
+    views_high: bool,
+    eng_high: bool,
+    split_v: float,
+    split_e: float,
+    v_max: float,
+    e_max: float,
+) -> tuple[float, float]:
+    """Return the geometric centre of the 2x2 cell implied by the classification tier.
+
+    The quadrant is now a purely categorical map of the SVC tier, so each
+    platform's marker sits at the centre of its predicted cell instead of at
+    the raw regression coordinates.
+    """
+    x = (split_v / 2.0) if not views_high else (split_v + v_max * 1.25) / 2.0
+    y = (split_e / 2.0) if not eng_high else (split_e + e_max * 1.25) / 2.0
+    return x, y
+
+
+def _cell_spread_offsets(
+    platforms: List[str],
+    clas_by_platform: Dict[str, Dict[str, Any]],
+) -> Dict[str, tuple[float, float]]:
+    """Deterministic unit-fraction offsets so platforms sharing a classification
+    cell fan out in a staggered column instead of stacking at the same point."""
+    groups: Dict[tuple[bool, bool], List[str]] = {}
+    for p in platforms:
+        c = clas_by_platform.get(p, {})
+        key = (
+            _tier_is_high(c.get("views", "views_0")),
+            _tier_is_high(c.get("engagement", "engagement_0")),
+        )
+        groups.setdefault(key, []).append(p)
+
+    offsets: Dict[str, tuple[float, float]] = {}
+    for members in groups.values():
+        n = len(members)
+        if n == 1:
+            offsets[members[0]] = (0.0, 0.0)
+            continue
+        for i, m in enumerate(members):
+            t = -0.22 + 0.44 * (i / (n - 1))  # even vertical stagger
+            x_shift = 0.035 if i % 2 == 0 else -0.035  # alternate horizontally
+            offsets[m] = (x_shift, t)
+    return offsets
+
+
+# ---------------------------------------------------------------------------
 # SECTION 1: CONTENT & CREATIVE
 # ---------------------------------------------------------------------------
 st.markdown(
@@ -721,7 +818,7 @@ else:
                 """
                 <div style="margin-bottom:0.6rem;">
                     <div style="font-size:0.95rem; font-weight:700; color:#0D0D0D;">Part A: All-Platform Comparative Performance Matrix</div>
-                    <div style="font-size:0.8rem; color:#6B7280;">Simultaneous positioning of all platforms across continuous Views (X) and Engagements (Y).</div>
+                    <div style="font-size:0.8rem; color:#6B7280;">All platforms positioned by their SVC classification tier — split lines are the high/low bin thresholds.</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -733,8 +830,8 @@ else:
             all_v = [max(0.0, float(results_by_platform[p]["lin"].get("views", 0.0))) for p in eval_platforms]
             all_e = [max(0.0, float(results_by_platform[p]["lin"].get("engagement", 0.0))) for p in eval_platforms]
             
-            ref_v = 28000
-            ref_e = 1000
+            ref_v = classifier_bin_thresholds()["views"]
+            ref_e = classifier_bin_thresholds()["eng"]
             max_v_all = max(max(all_v) * 1.3, ref_v * 2.2, 50000)
             max_e_all = max(max(all_e) * 1.3, ref_e * 2.2, 2500)
 
@@ -761,17 +858,31 @@ else:
                 "YT": "#FF0000",
             }
 
-            # Plot every evaluated platform concurrently
+            # Plot every evaluated platform at its classification cell centre
+            _clas_map_all = {
+                p: results_by_platform[p]["clas"] for p in eval_platforms
+            }
+            _spread_all = _cell_spread_offsets(eval_platforms, _clas_map_all)
             for p in eval_platforms:
-                p_v = max(0.0, float(results_by_platform[p]["lin"].get("views", 0.0)))
-                p_e = max(0.0, float(results_by_platform[p]["lin"].get("engagement", 0.0)))
+                p_lin = results_by_platform[p]["lin"]
+                p_clas = results_by_platform[p]["clas"]
+                p_v = max(0.0, float(p_lin.get("views", 0.0)))
+                p_e = max(0.0, float(p_lin.get("engagement", 0.0)))
+                _v_hi = _tier_is_high(p_clas.get("views", "views_0"))
+                _e_hi = _tier_is_high(p_clas.get("engagement", "engagement_0"))
+                p_x, p_y = _tier_center(
+                    _v_hi, _e_hi, ref_v, ref_e, max_v_all, max_e_all,
+                )
+                _dx, _dy = _spread_all[p]
+                p_x += _dx * (ref_v if not _v_hi else max_v_all * 1.25 - ref_v)
+                p_y += _dy * (ref_e if not _e_hi else max_e_all * 1.25 - ref_e)
                 p_col = PLATFORM_PALETTE.get(p, "#2563EB")
 
                 # Halo ring
                 fig_all.add_trace(
                     go.Scatter(
-                        x=[p_v],
-                        y=[p_e],
+                        x=[p_x],
+                        y=[p_y],
                         mode="markers",
                         marker=dict(size=32, color=p_col, opacity=0.2),
                         hoverinfo="skip",
@@ -782,8 +893,8 @@ else:
                 # Solid point
                 fig_all.add_trace(
                     go.Scatter(
-                        x=[p_v],
-                        y=[p_e],
+                        x=[p_x],
+                        y=[p_y],
                         mode="markers+text",
                         marker=dict(size=18, color=p_col, symbol="circle", line=dict(color="#FFFFFF", width=2.5)),
                         text=[f"<b>{PLATFORM_NAMES.get(p, p)}</b>"],
@@ -791,6 +902,12 @@ else:
                         textfont=dict(size=10.5, color="#0F172A", family="Inter, sans-serif"),
                         name=PLATFORM_NAMES.get(p, p),
                         showlegend=False,
+                        hoverinfo="text",
+                        hovertext=(
+                            f"<b>{PLATFORM_NAMES.get(p, p)} ({p})</b><br>"
+                            f"Tier: <b>{p_clas.get('views')} · {p_clas.get('engagement')}</b><br>"
+                            f"Regression: {p_v:,.0f} views · {p_e:,.0f} engagements"
+                        ),
                     )
                 )
 
@@ -801,7 +918,7 @@ else:
                 plot_bgcolor="#FAFAFC",
                 hovermode=False,
                 xaxis=dict(
-                    title="<b>Predicted Views (All Platforms)</b>",
+                    title="<b>Views Classification Tier (All Platforms)</b>",
                     title_font=dict(size=11, color="#64748B", family="Inter, sans-serif"),
                     range=[0, max_v_all * 1.15],
                     showgrid=False,
@@ -811,7 +928,7 @@ else:
                     tickfont=dict(size=10, color="#64748B"),
                 ),
                 yaxis=dict(
-                    title="<b>Predicted Engagements (All Platforms)</b>",
+                    title="<b>Engagement Classification Tier (All Platforms)</b>",
                     title_font=dict(size=11, color="#64748B", family="Inter, sans-serif"),
                     range=[0, max_e_all * 1.15],
                     showgrid=False,
@@ -900,24 +1017,19 @@ else:
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem;">
                         <div>
                             <div style="font-size:0.95rem; font-weight:700; color:#0D0D0D;">Part A: Strategic Performance Matrix</div>
-                            <div style="font-size:0.8rem; color:#6B7280;">Continuous regression outputs mapped against historical rugby median benchmarks.</div>
+                            <div style="font-size:0.8rem; color:#6B7280;">Each platform is placed at the centre of its SVC classification cell — the exact regression figures live in Part B below.</div>
                         </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
 
-                # Platform benchmark medians (IQR empirical split thresholds)
-                PLATFORM_MEDIANS = {
-                    "FB": {"views": 15000, "eng": 450},
-                    "IG": {"views": 28000, "eng": 1200},
-                    "TT": {"views": 35000, "eng": 1800},
-                    "YT": {"views": 22000, "eng": 320},
-                }
-
-                current_med = PLATFORM_MEDIANS.get(p_code, {"views": 25000, "eng": 800})
-                med_views = current_med["views"]
-                med_eng = current_med["eng"]
+                # Quadrant split lines = predict_clas high/low bin thresholds.
+                # Same global yardstick the classification tier uses, so the
+                # regression dot and the highlighted tier agree by construction.
+                _bin_thr = classifier_bin_thresholds()
+                med_views = _bin_thr["views"]
+                med_eng = _bin_thr["eng"]
 
                 # Build Sophisticated Continuous Scatter Quadrant Chart
                 fig_quad = go.Figure()
@@ -965,7 +1077,7 @@ else:
                 # Quadrant Soft Badges / Labels
                 fig_quad.add_annotation(
                     x=med_views * 0.48, y=max_e * 1.08,
-                    text="<b>NICHE / DISCUSSION</b><br><span style='font-size:10px; color:#854D0E;'>High Engagement · Sub-Median Views</span>",
+                    text="<b>NICHE / DISCUSSION</b><br><span style='font-size:10px; color:#854D0E;'>High Engagement · Below Threshold Views</span>",
                     showarrow=False, font=dict(family="Inter, system-ui, sans-serif", size=10.5, color="#A16207")
                 )
                 fig_quad.add_annotation(
@@ -975,7 +1087,7 @@ else:
                 )
                 fig_quad.add_annotation(
                     x=med_views * 0.48, y=med_eng * 0.16,
-                    text="<b>LOW SIGNAL</b><br><span style='font-size:10px; color:#881337;'>Sub-Median Across Both</span>",
+                    text="<b>LOW SIGNAL</b><br><span style='font-size:10px; color:#881337;'>Below Threshold Across Both</span>",
                     showarrow=False, font=dict(family="Inter, system-ui, sans-serif", size=10.5, color="#BE123C")
                 )
                 fig_quad.add_annotation(
@@ -984,36 +1096,59 @@ else:
                     showarrow=False, font=dict(family="Inter, system-ui, sans-serif", size=10.5, color="#1D4ED8")
                 )
 
-                # Add other platform ghost points
+                # Add other platform ghost points (positioned by their own tier)
+                _clas_map_p = {
+                    q: results_by_platform[q]["clas"] for q in eval_platforms
+                }
+                _spread_p = _cell_spread_offsets(eval_platforms, _clas_map_p)
                 for other_p in eval_platforms:
                     if other_p != p_code and other_p in results_by_platform:
                         o_lin = results_by_platform[other_p]["lin"]
+                        o_clas = results_by_platform[other_p]["clas"]
                         o_v = max(0.0, float(o_lin.get("views", 0.0)))
                         o_e = max(0.0, float(o_lin.get("engagement", 0.0)))
+                        _o_v_hi = _tier_is_high(o_clas.get("views", "views_0"))
+                        _o_e_hi = _tier_is_high(o_clas.get("engagement", "engagement_0"))
+                        o_x, o_y = _tier_center(
+                            _o_v_hi, _o_e_hi, med_views, med_eng, max_v, max_e,
+                        )
+                        _dx, _dy = _spread_p[other_p]
+                        o_x += _dx * (med_views if not _o_v_hi else max_v * 1.25 - med_views)
+                        o_y += _dy * (med_eng if not _o_e_hi else max_e * 1.25 - med_eng)
                         fig_quad.add_trace(
                             go.Scatter(
-                                x=[o_v],
-                                y=[o_e],
+                                x=[o_x],
+                                y=[o_y],
                                 mode="markers+text",
                                 marker=dict(size=14, color="#CBD5E1", line=dict(color="#FFFFFF", width=2)),
                                 text=[f"<b>{other_p}</b>"],
                                 textposition="top center",
                                 textfont=dict(size=9.5, color="#64748B", family="Inter, system-ui, sans-serif"),
                                 hoverinfo="text",
-                                hovertext=f"<b>{PLATFORM_NAMES.get(other_p, other_p)}</b><br>Views: {o_v:,.0f}<br>Eng: {o_e:,.0f}",
+                                hovertext=(
+                                    f"<b>{PLATFORM_NAMES.get(other_p, other_p)}</b><br>"
+                                    f"Tier: <b>{o_clas.get('views')} · {o_clas.get('engagement')}</b><br>"
+                                    f"Regression: {o_v:,.0f} views · {o_e:,.0f} engagements"
+                                ),
                                 name=f"Other: {other_p}",
                                 showlegend=False,
                             )
                         )
 
-                # Active Focus Platform Point with modern aesthetic
+                # Active Focus Platform Point — placed at its classification cell
                 act_marker_color = "#10B981" if (v_is_high and e_is_high) else ("#3B82F6" if v_is_high else ("#F59E0B" if e_is_high else "#F43F5E"))
-                
+                act_x, act_y = _tier_center(
+                    v_is_high, e_is_high, med_views, med_eng, max_v, max_e
+                )
+                _adx, _ady = _spread_p[p_code]
+                act_x += _adx * (med_views if not v_is_high else max_v * 1.25 - med_views)
+                act_y += _ady * (med_eng if not e_is_high else max_e * 1.25 - med_eng)
+
                 # Halo ring effect around active marker
                 fig_quad.add_trace(
                     go.Scatter(
-                        x=[pred_views],
-                        y=[pred_eng],
+                        x=[act_x],
+                        y=[act_y],
                         mode="markers",
                         marker=dict(
                             size=34,
@@ -1028,8 +1163,8 @@ else:
                 # Solid Active Marker
                 fig_quad.add_trace(
                     go.Scatter(
-                        x=[pred_views],
-                        y=[pred_eng],
+                        x=[act_x],
+                        y=[act_y],
                         mode="markers+text",
                         marker=dict(
                             size=20,
@@ -1042,10 +1177,10 @@ else:
                         textfont=dict(size=11, color="#0F172A", family="Inter, system-ui, sans-serif"),
                         hoverinfo="text",
                         hovertext=(
-                            f"<b>★ {p_name} Exact Placement</b><br>"
-                            f"Views: <b>{pred_views:,.0f}</b> (Median: {med_views:,.0f})<br>"
-                            f"Engagement: <b>{pred_eng:,.0f}</b> (Median: {med_eng:,.0f})<br>"
-                            f"Classification: <b>{views_bin} / {eng_bin}</b>"
+                            f"<b>★ {p_name} Classification Tier</b><br>"
+                            f"Tier: <b>{views_bin} · {eng_bin}</b><br>"
+                            f"Regression estimate: {pred_views:,.0f} views · {pred_eng:,.0f} engagements<br>"
+                            f"High-bin thresholds: {med_views:,.0f} views · {med_eng:,.0f} eng"
                         ),
                         name=f"Active ({p_name})",
                         showlegend=False,
@@ -1059,7 +1194,7 @@ else:
                     plot_bgcolor="#FAFAFC",
                     hovermode=False,
                     xaxis=dict(
-                        title="<b>Predicted Views</b>",
+                        title="<b>Views Classification Tier</b>",
                         title_font=dict(size=11, color="#64748B", family="Inter, system-ui, sans-serif"),
                         range=[0, max_v * 1.15],
                         showgrid=False,
@@ -1069,7 +1204,7 @@ else:
                         tickfont=dict(size=10, color="#64748B"),
                     ),
                     yaxis=dict(
-                        title="<b>Predicted Engagements</b>",
+                        title="<b>Engagement Classification Tier</b>",
                         title_font=dict(size=11, color="#64748B", family="Inter, system-ui, sans-serif"),
                         range=[0, max_e * 1.15],
                         showgrid=False,
@@ -1100,11 +1235,11 @@ else:
                     f"""
                     <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:0.6rem; margin-top:0.4rem;">
                         <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:0.6rem 0.8rem; text-align:center;">
-                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Views vs Median</div>
+                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Views vs High Bin</div>
                             <div style="font-size:1.05rem; font-weight:700; color:{badge_v_color}; margin-top:0.1rem;">{v_ratio:.0f}%</div>
                         </div>
                         <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:0.6rem 0.8rem; text-align:center;">
-                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Engagement vs Median</div>
+                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Engagement vs High Bin</div>
                             <div style="font-size:1.05rem; font-weight:700; color:{badge_e_color}; margin-top:0.1rem;">{e_ratio:.0f}%</div>
                         </div>
                         <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:0.6rem 0.8rem; text-align:center;">
