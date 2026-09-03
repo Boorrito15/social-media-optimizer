@@ -19,6 +19,8 @@ google-genai
 openai-whisper
 xgboost
 scikit-learn
+sentence-transformers    # used by models.shared.clustering (predict-time embeddings)
+regex                    # Unicode-aware patterns for hashtag/mention/emoji multi-hot
 
 # UI & Visualization
 streamlit
