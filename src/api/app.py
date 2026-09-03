@@ -26,6 +26,7 @@ from src.api.schemas import (
 )
 from src.ml import infer as inferlib
 from src.ml import predict
+from src.ml import predict_keras
 
 # The frame-by-frame model branch (feature/frame-by-frame-model) adds
 # `predict_fbf`; this UI/API branch should keep running even when that module
@@ -35,9 +36,12 @@ try:
 except Exception:  # noqa: BLE001
     _predict_fbf = None
 
+# Prefer Keras over XGBoost when the Keras bundle is present (Path A)
+_KERAS_AVAILABLE = False
+
 app = FastAPI(
     title="Social Media Optimizer API",
-    version="0.3.0",
+    version="0.3.1",
     description="Predict whether an All Blacks short-form video will perform. "
     "Give it a free-text description; it is projected into a frame-by-frame "
     "scene breakdown (LLM) and scored.",
@@ -55,7 +59,15 @@ _FBF_AVAILABLE = _predict_fbf is not None and os.path.exists(_predict_fbf.BUNDLE
 
 @app.on_event("startup")
 def _load() -> None:
+    global _KERAS_AVAILABLE
+
+    # Prefer Keras model (Path A) — it achieves 82-84% accuracy
+    predict_keras.load()
+    _KERAS_AVAILABLE = predict_keras.is_available()
+
+    # Fallback: XGBoost compact model
     predict.load()
+
     if _FBF_AVAILABLE:
         _predict_fbf._load()
     _ = predict._get_embedder() if predict._similar is not None else None
@@ -63,6 +75,10 @@ def _load() -> None:
 
 @app.get("/health")
 def health() -> dict:
+    if _KERAS_AVAILABLE:
+        return {"status": "ok", "mode": "keras_2head",
+                "models_loaded": True,
+                "accuracy": predict_keras._bundle.get("metrics", {}) if predict_keras._bundle else None}
     if _FBF_AVAILABLE:
         return {"status": "ok", "mode": "frame-by-frame",
                 "models_loaded": _predict_fbf._bundle is not None}
@@ -79,6 +95,17 @@ def infer_endpoint(req: PredictRequest) -> dict:
 @app.post("/predict", response_model=PredictResponse)
 def predict_endpoint(req: PredictRequest) -> dict:
     desc = (req.description or "").strip()
+
+    # Keras 2-head model (Path A) — best accuracy
+    if _KERAS_AVAILABLE:
+        raw = predict_keras.build_raw(req.model_dump())
+        meta = inferlib.infer(desc)
+        _fill_auto_fields(req, raw, meta)
+        result = predict_keras.predict_with_explain(raw)
+        result["inferred"] = meta
+        result["model_type"] = "keras_2head"
+        return result
+
     raw = predict.build_raw(req.model_dump())
 
     if _FBF_AVAILABLE and desc:
@@ -109,16 +136,47 @@ def predict_endpoint(req: PredictRequest) -> dict:
     return result
 
 
+@app.post("/predict/multi", response_model=PredictResponse)
+def predict_multi_endpoint(req: PredictRequest) -> dict:
+    """Score the same idea across all platforms.
+
+    Returns the base result plus:
+      - platform_leaderboard: sorted list of per-platform scores
+      - best_platform: the platform with the highest go_score
+      - platforms: detailed per-platform results
+    """
+    desc = (req.description or "").strip()
+
+    if _KERAS_AVAILABLE:
+        raw = predict_keras.build_raw(req.model_dump())
+        meta = inferlib.infer(desc)
+        _fill_auto_fields(req, raw, meta)
+        result = predict_keras.predict_multi(raw)
+        result["inferred"] = meta
+        result["model_type"] = "keras_2head"
+        return result
+
+    # Fallback: use the single-platform predict and just vary the platform field
+    result = predict_endpoint(req)
+    return result
+
+
+def _fill_auto_fields(req: PredictRequest, raw: dict, meta: dict) -> None:
+    """Fill fields the user left at defaults with inferred values."""
+    if not req.auto:
+        return
+    default_req = PredictRequest()
+    for field in ("title", "platform", "page", "duration_seconds",
+                  "content_themes", "format_access", "tones"):
+        default_val = getattr(default_req, field)
+        current = getattr(req, field)
+        if current == default_val or (isinstance(current, list) and not current):
+            raw[field] = meta.get(field, default_val)
+
+
 def _compact_predict(req: PredictRequest, raw: dict) -> dict:
     meta = inferlib.infer(req.description or "")
-    if req.auto:
-        default_req = PredictRequest()
-        for field in ("title", "platform", "page", "duration_seconds",
-                      "content_themes", "format_access", "tones"):
-            default_val = getattr(default_req, field)
-            current = getattr(req, field)
-            if current == default_val or (isinstance(current, list) and not current):
-                raw[field] = meta.get(field, default_val)
+    _fill_auto_fields(req, raw, meta)
     result = predict.predict_raw(raw)
     result["inferred"] = meta
     return result

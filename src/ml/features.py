@@ -245,10 +245,20 @@ class FeaturePipeline:
     def n_features(self) -> int:
         if not self.fitted:
             raise RuntimeError("not fitted")
-        n = len(self.cat_columns) + len(self.json_vocab) + len(self.base_columns)
+        return len(self.feature_names())
+
+    def feature_names(self) -> List[str]:
+        """Return ordered list of all feature column names."""
+        if not self.fitted:
+            raise RuntimeError("not fitted")
+        names = list(self.cat_columns) + list(self.json_columns) + list(self.base_columns)
         if not self.compact:
-            n += len(self.hashtag_vocab) + len(self.mention_vocab) + len(self.emoji_vocab)
-        return n
+            # Add per-token columns (hashtag, mention, emoji) — these are
+            # created in _multi_hot style in transform().
+            names += [f"hashtag_{t}" for t in self.hashtag_vocab]
+            names += [f"mention_{t}" for t in self.mention_vocab]
+            names += [f"emoji_{t}" for t in self.emoji_vocab]
+        return names
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,9 @@ case "${1:-}" in
   train)
     .venv/bin/python -W ignore -m src.ml.train
     ;;
+  train-keras)
+    .venv/bin/python -W ignore -m src.ml.train_keras
+    ;;
   api)
     exec .venv/bin/uvicorn src.api.app:app --host 0.0.0.0 --port "${PORT:-8000}" --reload
     ;;

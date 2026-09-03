@@ -44,7 +44,7 @@ All outputs are uploaded to regional standard buckets in `asia-southeast2`:
 - **[`src/video/web_dashboard.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/web_dashboard.py)**: MinionsScout live web dashboard server.
 - **[`src/ml/`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/ml)`**: ML feature pipeline (`features.py`), training (`train.py`), serving (`predict.py`), and metadata auto-inference (`infer.py`).
 - **[`src/api/app.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/api/app.py)**: FastAPI prediction service (see "Predictor UI & API" below).
-- **[`streamlit_app.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/streamlit_app.py)**: Streamlit dashboard — gemini-style **Analyzer** landing page + **Explore** tab.
+- **[`streamlit_app.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/streamlit_app.py)**: Streamlit dashboard — a professional social-media-manager "Studio" with six sections (see *Dashboard sections* below).
 - **[`run.sh`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/run.sh)**: One-command launcher for the API + UI.
 
 ---
@@ -74,6 +74,25 @@ pip install -r requirements.txt -r requirements-api.txt   # adds fastapi/uvicorn
 # run it all (API on :8000, Streamlit on :8501)
 ./run.sh all     # open http://127.0.0.1:8501
 ```
+
+### Dashboard sections
+
+The Streamlit UI is organised as a sidebar-navigated dashboard with six sections:
+
+| Section | What it does |
+| --- | --- |
+| 🎬 **Idea Studio** | Type a description (or pick a quick-example chip), get a make/skip verdict, Go-score gauge, typical views / engagement / demo revenue KPIs, probability bars, auto-inferred metadata, and similar historical posts. |
+| ⚖️ **Compare** | Score 2–4 ideas side-by-side. Side-by-side bar chart, best-idea highlight, full verdict + KPIs per scenario. |
+| 🕘 **History** | In-session log of every analysis (timestamp, description, verdict, Go score). Re-open any past idea with one click, or export the whole history as JSON. |
+| 🔬 **Advanced Insights** | Aggregated findings from `data/processed/processed.csv`: top content themes, formats, tones, what themes drive views, platform leaders (median views vs. engagement), year-over-year trend. |
+| 📚 **Explore** | Representative posts from the model index — scatter + box plots, full sample table. |
+| ℹ️ **About** | What the models do, the verdict maths, honest limits, and the architecture map. |
+
+The sidebar also carries a **⚙️ Manual override** panel: toggle it on to manually
+pick platform, page, duration, themes, formats, tones and money assumptions
+before scoring — instead of trusting auto-inference blindly. When the toggle
+is off (default), the app sends just the description and lets the model
+auto-fill the rest.
 
 Or run the two parts separately:
 

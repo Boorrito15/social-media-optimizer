@@ -84,6 +84,15 @@ class SimilarVideo(BaseModel):
     distance: float
 
 
+class PlatformResult(BaseModel):
+    platform: str
+    go_score: float
+    verdict: str
+    views_p: float
+    eng_p: float
+    estimates: Dict[str, Any]
+
+
 class PredictResponse(BaseModel):
     go_score: float
     verdict: str
@@ -97,6 +106,10 @@ class PredictResponse(BaseModel):
     money: Dict[str, Any]
     similar: List[SimilarVideo]
     model_metrics: Dict[str, float]
+    model_type: str = Field(default="", description="Which model served this prediction.")
+    platform_leaderboard: List[PlatformResult] = Field(default_factory=list, description="Per-platform scores.")
+    best_platform: str = Field(default="", description="Platform with highest go_score.")
+    explanation: Dict[str, Any] = Field(default_factory=dict, description="Feature-level explanation.")
 
 
 class InferResponse(BaseModel):
