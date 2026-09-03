@@ -1,28 +1,27 @@
 """Social Media Optimizer — Studio & Prediction Engine.
 
-Architecture:
-- Page 1 · Concept: Refined hero composer with preset chips & auto-detection.
-- Page 2 · Parameters: Streamlined 2-column layout (Distribution & Setting on left, Content & Entities on right).
-- Page 3 · Forecast: Cross-platform score matrix (FB, IG, TT, YT), reach metrics & SQLite persistence.
-
-Flipped / Light Colorway Palette:
-- background_primary: #FFFFFF
-- background_secondary: #F4F4F6
-- text_primary: #0D0D0D
-- text_secondary: #555555
-- accent_branding: #1A1A1A
-- data_success: #009E60
-- data_alert: #D32F2F
+Revamped Architecture (Using models/ directly as specified in models/reference.md):
+- Section 1: Video Description & Caption
+- Section 2:
+    - Part A: Target Platform (default none), Account/Channel (default none), Duration (default 20s)
+    - Part B: Full description_json metadata (content_theme, format_access, people, brands, event, tone, context, overall_team, audio_format)
+- Section 3: Output
+    - Part A: 2x2 Bins / Quadrant (views_<i>, engagement_<j>)
+    - Part B: Regressions (actual predicted views & engagement numbers from predict_lin)
+    - Part C: Production Budget & Value / ROI Calculator with platform-specific CPM & Engagement rates
 """
 
 from __future__ import annotations
 
 import html
+import json
 import os
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, Dict, List
 
+import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 # Ensure repository root is on sys.path
@@ -30,36 +29,22 @@ REPO_ROOT = Path(__file__).resolve().parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.db.database import delete_prediction, get_history, get_prediction, init_db
-from src.ml.service import infer_metadata, run_prediction_pipeline
+# Import exclusively from models package
+from models import predict_clas, predict_lin
 
 # ---------------------------------------------------------------------------
 # Streamlit Page Config
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Social Media Optimizer",
-    page_icon="⚡",
+    page_icon="🏉",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# Initialize database schema
-init_db()
-
 # ---------------------------------------------------------------------------
-# Controlled Vocabularies from notebooks/describe_rob.ipynb & models/reference.md
-# ---------------------------------------------------------------------------
-PLATFORMS = [
-    ("ALL", "All 4 Platforms (FB, IG, TT, YT)"),
-    ("FB", "Facebook"),
-    ("IG", "Instagram"),
-    ("TT", "TikTok"),
-    ("YT", "YouTube"),
-]
-PLATFORM_KEYS = [p[0] for p in PLATFORMS]
-PLATFORM_LABELS = dict(PLATFORMS)
-
 # Official Platform Brand SVG Logos
+# ---------------------------------------------------------------------------
 PLATFORM_LOGOS = {
     "FB": """<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle; display:inline-block;"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" fill="#1877F2"/></svg>""",
     "IG": """<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle; display:inline-block;"><radialGradient id="ig-grad" cx="20%" cy="105%" r="120%"><stop offset="0%" stop-color="#fdf497"/><stop offset="5%" stop-color="#fdf497"/><stop offset="45%" stop-color="#fd5949"/><stop offset="60%" stop-color="#d6249f"/><stop offset="90%" stop-color="#285AEB"/></radialGradient><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z" fill="url(#ig-grad)"/></svg>""",
@@ -67,14 +52,41 @@ PLATFORM_LOGOS = {
     "YT": """<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle; display:inline-block;"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" fill="#FF0000"/></svg>""",
 }
 
-
-PLATFORM_PAGES = {
-    "ALL": ["All Blacks", "Black Ferns", "NZ Sevens", "NZR", "ABXV", "Bunnings NPC", "SRP"],
-    "FB": ["All Blacks", "Black Ferns", "NZ Sevens", "NZR", "ABXV", "Bunnings NPC", "SRP"],
-    "IG": ["All Blacks", "Black Ferns", "NZ Sevens", "NZR", "ABXV", "Bunnings NPC", "SRP"],
-    "TT": ["All Blacks", "Black Ferns", "NZ Sevens", "NZR"],
-    "YT": ["All Blacks", "Black Ferns", "NZ Sevens", "NZR", "ABXV"],
+# ---------------------------------------------------------------------------
+# Valuation Economics Parameters (Per User Prompt)
+# ---------------------------------------------------------------------------
+# Views CPM (Per 1,000 views)
+VIEWS_CPM = {
+    "YT": 35.0,
+    "IG": 17.5,
+    "TT": 10.0,
+    "FB": 10.0,
 }
+
+# Value per individual Engagement
+ENGAGEMENT_VALUE = {
+    "IG": 2.30,
+    "FB": 2.10,
+    "TT": 2.75,
+    "YT": 0.75,
+}
+
+PLATFORM_NAMES = {
+    "FB": "Facebook",
+    "IG": "Instagram",
+    "TT": "TikTok",
+    "YT": "YouTube",
+}
+
+PAGE_OPTIONS = [
+    "All Blacks",
+    "Black Ferns",
+    "NZ Sevens",
+    "NZR",
+    "ABXV",
+    "Bunnings NPC",
+    "Super Rugby",
+]
 
 THEME_OPTIONS = [
     "try",
@@ -104,38 +116,6 @@ FORMAT_OPTIONS = [
     "promotion",
     "ticket sales",
 ]
-
-TONE_OPTIONS = [
-    "excitement",
-    "pride",
-    "tension",
-    "nostalgia",
-    "humour",
-    "wholesome",
-    "solemn",
-    "sadness",
-    "lighthearted",
-    "provocative",
-]
-
-CONTEXT_OPTIONS = [
-    "match day",
-    "pre-match",
-    "post-match",
-    "gym",
-    "changing room",
-    "press conference",
-    "announcement",
-    "tour",
-    "travel",
-    "off-season",
-    "squad naming",
-    "jersey reveal",
-    "award",
-]
-
-AUDIO_OPTIONS = ["ambient", "voice", "song", "none", "other"]
-TEAM_OPTIONS = ["men", "women", "veterans", "maori", "youth"]
 
 PEOPLE_OPTIONS = [
     "all blacks",
@@ -181,268 +161,123 @@ BRAND_OPTIONS = [
     "barfoot & thompson",
 ]
 
-DEMO_PROMPTS = [
-    {
-        "label": "Winning Try",
-        "desc": "Ardie Savea & Beauden Barrett match winner",
-        "text": "Ardie Savea and Beauden Barrett combine for a last-minute winning try against the Springboks in their classic Adidas kit — the stadium erupts in celebration!",
-    },
-    {
-        "label": "Training Drill",
-        "desc": "Will Jordan & squad gym banter",
-        "text": "Behind the scenes gym session with Will Jordan and Scott Barrett doing intense agility drills in Ineos and Tudor training gear.",
-    },
-    {
-        "label": "Player Tribute",
-        "desc": "Sam Cane farewell & legacy reflections",
-        "text": "An emotional farewell tribute for Sam Cane: classic career highlights in the black jersey, standing ovation from the crowd, and a heartfelt interview.",
-    },
-    {
-        "label": "Counter Attack",
-        "desc": "Caleb Clarke & Damian McKenzie sprint",
-        "text": "Caleb Clarke breaks a midfield tackle and offloads to Damian McKenzie, who chips ahead and sprints down the touchline to score under the posts in Ford sponsored match.",
-    },
+EVENT_OPTIONS = [
+    "rugby world cup",
+    "rugby championship",
+    "bledisloe cup",
+    "autumn nations series",
+    "super rugby pacific",
+    "bunnings npc",
+    "sevens series",
 ]
 
+TONE_OPTIONS = [
+    "excitement",
+    "pride",
+    "tension",
+    "nostalgia",
+    "humour",
+    "wholesome",
+    "solemn",
+    "sadness",
+    "lighthearted",
+    "provocative",
+]
+
+CONTEXT_OPTIONS = [
+    "match day",
+    "stadium",
+    "pre-match",
+    "post-match",
+    "gym",
+    "changing room",
+    "press conference",
+    "announcement",
+    "tour",
+    "travel",
+    "off-season",
+    "squad naming",
+    "jersey reveal",
+    "award",
+]
+
+TEAM_OPTIONS = ["men", "women", "veterans", "maori", "youth"]
+AUDIO_OPTIONS = ["ambient", "voice", "song", "none", "other"]
 
 # ---------------------------------------------------------------------------
-# Custom CSS: Flipped / Clean Light Mode Colorway
+# Custom CSS: Light Minimalist Theme
 # ---------------------------------------------------------------------------
-CUSTOM_CSS = """
+st.markdown(
+    """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-/* Smooth Scrolling & Base Canvas */
-html {
-    scroll-behavior: smooth !important;
-}
-
-body {
+html, body, [data-testid="stAppViewContainer"] {
     background-color: #FFFFFF !important;
     color: #0D0D0D !important;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-    letter-spacing: -0.01em !important;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
 
-[data-testid="stAppViewContainer"], [data-testid="stMain"], section.main {
-    background-color: #FFFFFF !important;
-    scroll-behavior: smooth !important;
-}
-
-/* Hide Default Streamlit Clutter */
-[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] {
+[data-testid="stHeader"], [data-testid="stToolbar"] {
     display: none !important;
 }
 
-/* Centered Main Canvas */
-.main .block-container, [data-testid="stMainBlockContainer"] {
-    max-width: 1040px !important;
-    padding-top: 1.5rem !important;
-    padding-bottom: 5rem !important;
-    padding-left: 1.5rem !important;
-    padding-right: 1.5rem !important;
+.main .block-container {
+    max-width: 1060px !important;
+    padding: 2rem 1.5rem 5rem 1.5rem !important;
     margin: 0 auto !important;
-}
-
-/* Sticky Top Navigation Header */
-.top-nav-bar {
-    position: sticky;
-    top: 0;
-    z-index: 999;
-    background: rgba(255, 255, 255, 0.94);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-    padding: 0.85rem 0;
-    margin-bottom: 2.5rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.nav-brand {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: #0D0D0D;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.nav-brand-badge {
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: #0D0D0D;
-    background: #F4F4F6;
-    border: 1px solid #CCCCCC;
-    padding: 0.15rem 0.5rem;
-    border-radius: 4px;
-}
-
-.nav-steps {
-    display: flex;
-    gap: 0.4rem;
-}
-
-.nav-step-item {
-    font-size: 0.82rem;
-    font-weight: 500;
-    color: #555555 !important;
-    text-decoration: none !important;
-    padding: 0.35rem 0.75rem;
-    border-radius: 6px;
-    transition: all 0.15s ease;
-}
-
-.nav-step-item:hover {
-    color: #0D0D0D !important;
-    background: #F4F4F6;
 }
 
 /* Section Header Typography */
 .section-header {
-    margin-bottom: 1.8rem;
+    margin-top: 1.5rem;
+    margin-bottom: 1.25rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 .section-tag {
     font-size: 0.75rem;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: #555555;
-    margin-bottom: 0.35rem;
+    margin-bottom: 0.25rem;
 }
 
 .section-title {
-    font-size: 1.85rem;
+    font-size: 1.5rem;
     font-weight: 700;
-    letter-spacing: -0.025em;
+    letter-spacing: -0.02em;
     color: #0D0D0D;
-    line-height: 1.25;
-    margin-bottom: 0.4rem;
+    line-height: 1.2;
 }
 
-.section-desc {
-    font-size: 0.92rem;
+.section-subtitle {
+    font-size: 0.88rem;
     color: #555555;
-    line-height: 1.5;
-    max-width: 680px;
+    margin-top: 0.25rem;
 }
 
-/* Streamlit Container Borders - Clean Card Style */
+/* Clean Card Wrapper */
 [data-testid="stVerticalBlockBorderWrapper"] {
     background: #F4F4F6 !important;
     border: 1px solid rgba(0, 0, 0, 0.08) !important;
     border-radius: 12px !important;
     padding: 1.25rem 1.4rem !important;
     margin-bottom: 1rem !important;
-    box-shadow: none !important;
 }
 
-.card-title {
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: #0D0D0D;
-    margin-bottom: 1rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-/* Native Input & Widget Styling */
-div[data-baseweb="input"], div[data-baseweb="select"], div[data-baseweb="textarea"] {
-    background-color: #FFFFFF !important;
-    border: 1px solid rgba(0, 0, 0, 0.15) !important;
-    border-radius: 8px !important;
-    color: #0D0D0D !important;
-}
-
-div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within {
-    border-color: #0D0D0D !important;
-}
-
-/* Streamlit Multiselect Tags */
-span[data-baseweb="tag"] {
-    background-color: #E5E5EA !important;
-    border: 1px solid rgba(0, 0, 0, 0.1) !important;
-    border-radius: 6px !important;
-    color: #0D0D0D !important;
-}
-
-/* Validation Alert */
-.val-box-invalid {
-    background: rgba(211, 47, 47, 0.08);
-    border: 1px solid #D32F2F;
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    color: #B71C1C;
-    font-size: 0.85rem;
-    line-height: 1.5;
-    margin-bottom: 1rem;
-}
-
-.val-box-valid {
-    background: rgba(0, 158, 96, 0.08);
-    border: 1px solid #009E60;
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    color: #007043;
-    font-size: 0.85rem;
-    margin-bottom: 1rem;
-}
-
-/* Scorecard Hero */
-.scorecard-hero {
-    background: #F4F4F6;
-    border: 1px solid rgba(0, 0, 0, 0.1);
-    border-radius: 12px;
-    padding: 1.5rem 1.8rem;
-    margin-bottom: 1.25rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.scorecard-number {
-    font-size: 3.2rem;
-    font-weight: 700;
-    letter-spacing: -0.03em;
-    line-height: 1;
-    margin: 0.25rem 0;
-}
-
-.score-success { color: #009E60; }
-.score-alert   { color: #D32F2F; }
-.score-neutral { color: #555555; }
-
-.status-badge {
-    display: inline-block;
-    font-size: 0.72rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: 0.2rem 0.6rem;
-    border-radius: 4px;
-}
-.status-green { background: rgba(0, 158, 96, 0.12); color: #007043; border: 1px solid #009E60; }
-.status-red   { background: rgba(211, 47, 47, 0.12); color: #B71C1C; border: 1px solid #D32F2F; }
-.status-gray  { background: rgba(0, 0, 0, 0.08); color: #555555; border: 1px solid #CCCCCC; }
-
-/* Streamlit Native Tabs Styling */
+/* Tabs Styling */
 button[data-baseweb="tab"] {
     background-color: #F4F4F6 !important;
     border: 1px solid rgba(0, 0, 0, 0.08) !important;
     border-radius: 8px 8px 0 0 !important;
-    padding: 0.65rem 1.25rem !important;
+    padding: 0.6rem 1.25rem !important;
     font-size: 0.9rem !important;
     font-weight: 600 !important;
     color: #555555 !important;
-    transition: all 0.15s ease !important;
     margin-right: 0.35rem !important;
-}
-
-button[data-baseweb="tab"]:hover {
-    color: #0D0D0D !important;
-    background-color: #EAEAEA !important;
 }
 
 button[data-baseweb="tab"][aria-selected="true"] {
@@ -455,783 +290,971 @@ button[data-baseweb="tab"][aria-selected="true"] {
 div[data-baseweb="tab-list"] {
     gap: 4px !important;
     border-bottom: 1px solid rgba(0, 0, 0, 0.1) !important;
-    margin-bottom: 1.2rem !important;
+    margin-bottom: 1rem !important;
 }
 
-div[data-baseweb="tab-panel"] {
-    padding-top: 0.5rem !important;
+/* Quadrant Styles */
+.quadrant-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.85rem;
+    margin: 1rem 0;
 }
 
+.quadrant-box {
+    background: #FFFFFF;
+    border: 1.5px solid rgba(0, 0, 0, 0.08);
+    border-radius: 10px;
+    padding: 1.2rem;
+    text-align: center;
+    transition: all 0.2s ease;
+}
 
-/* Button & Action Link Styles */
-.nav-action-primary {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: #0D0D0D;
-    color: #FFFFFF !important;
-    text-decoration: none !important;
-    font-size: 0.9rem;
+.quadrant-active {
+    border-color: #009E60 !important;
+    background: #F0FDF4 !important;
+    box-shadow: 0 4px 14px rgba(0, 158, 96, 0.12) !important;
+}
+
+.quadrant-tag {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.35rem;
+}
+
+.quadrant-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #0D0D0D;
+    margin-bottom: 0.25rem;
+}
+
+.quadrant-desc {
+    font-size: 0.8rem;
+    color: #555555;
+}
+
+/* Metric Display Cards */
+.metric-box {
+    background: #FFFFFF;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 10px;
+    padding: 1.2rem;
+    text-align: center;
+}
+
+.metric-label {
+    font-size: 0.78rem;
     font-weight: 600;
-    padding: 0.65rem 1.4rem;
-    border-radius: 8px;
-    transition: background 0.15s ease;
-    width: 100%;
-    text-align: center;
+    text-transform: uppercase;
+    color: #555555;
+    margin-bottom: 0.25rem;
 }
 
-.nav-action-primary:hover {
-    background: #262626;
+.metric-value {
+    font-size: 2.1rem;
+    font-weight: 800;
+    color: #0D0D0D;
+    letter-spacing: -0.02em;
 }
 
-.nav-action-secondary {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: #E5E5EA;
-    border: 1px solid rgba(0, 0, 0, 0.1);
-    color: #0D0D0D !important;
-    text-decoration: none !important;
-    font-size: 0.9rem;
-    font-weight: 500;
-    padding: 0.65rem 1.2rem;
-    border-radius: 8px;
-    transition: background 0.15s ease;
-    width: 100%;
-    text-align: center;
-}
-
-.nav-action-secondary:hover {
-    background: #D1D1D6;
-}
-
+/* Buttons */
 div.stButton > button {
     border-radius: 8px !important;
-    font-size: 0.88rem !important;
     font-weight: 600 !important;
-    padding: 0.5rem 1rem !important;
-    background-color: #FFFFFF !important;
-    color: #0D0D0D !important;
-    border: 1px solid rgba(0, 0, 0, 0.14) !important;
-    transition: all 0.15s ease !important;
+    background-color: #0D0D0D !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    padding: 0.65rem 1.5rem !important;
+    transition: background-color 0.15s ease !important;
 }
 
 div.stButton > button:hover {
-    border-color: #0D0D0D !important;
-    background-color: #F4F4F6 !important;
-}
-
-div.stButton > button[kind="primary"] {
-    background-color: #0D0D0D !important;
-    border: none !important;
-    color: #FFFFFF !important;
-}
-
-div.stButton > button[kind="primary"]:hover {
     background-color: #262626 !important;
 }
 </style>
+""",
+    unsafe_allow_html=True,
+)
 
-<!-- Top Sticky Header -->
-<div class="top-nav-bar">
-    <div class="nav-brand">
-        <span>🏉 SMO Studio</span>
-        <span class="nav-brand-badge">PRO</span>
-    </div>
-    <div class="nav-steps">
-        <a href="#section-1" target="_self" class="nav-step-item">01 · Concept</a>
-        <a href="#section-2" target="_self" class="nav-step-item">02 · Parameters</a>
-        <a href="#section-3" target="_self" class="nav-step-item">03 · Forecast</a>
-    </div>
+# ---------------------------------------------------------------------------
+# Top Header Banner
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid rgba(0,0,0,0.1);">
+    <div style="font-size:1.25rem; font-weight:700; color:#0D0D0D;">🏉 Social Media Optimizer <span style="font-size:0.75rem; background:#0D0D0D; color:#FFFFFF; padding:0.15rem 0.45rem; border-radius:4px; font-weight:600; margin-left:0.4rem;">MODEL STUDIO</span></div>
+    <div style="font-size:0.82rem; color:#555555;">Models Package Engine · reference.md Compliant</div>
 </div>
+""",
+    unsafe_allow_html=True,
+)
 
-<!-- Suppress Streamlit Cache-Clearing Keyboard Shortcuts (Cmd+C, Ctrl+C) -->
-<script>
-(function() {
-    const handleKeyShortcuts = function(e) {
-        if ((e.metaKey || e.ctrlKey) && ['c', 'C', 'v', 'V', 'x', 'X', 'a', 'A', 'z', 'Z'].includes(e.key)) {
-            e.stopImmediatePropagation();
-            return;
-        }
-        const tag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
-        if (tag === 'input' || tag === 'textarea') {
-            e.stopImmediatePropagation();
-        }
-    };
-    window.addEventListener('keydown', handleKeyShortcuts, true);
-    window.addEventListener('keyup', handleKeyShortcuts, true);
-    window.addEventListener('keypress', handleKeyShortcuts, true);
-    if (window.parent && window.parent !== window) {
-        try {
-            window.parent.addEventListener('keydown', handleKeyShortcuts, true);
-            window.parent.addEventListener('keyup', handleKeyShortcuts, true);
-            window.parent.addEventListener('keypress', handleKeyShortcuts, true);
-        } catch(err) {}
+# ---------------------------------------------------------------------------
+# Helper: Build DataFrame Shaped for models.predict_* (from reference.md)
+# ---------------------------------------------------------------------------
+def build_model_dataframe(
+    caption: str,
+    play_by_play: str,
+    platform: str,
+    page: str,
+    duration_seconds: float,
+    content_theme: List[str],
+    format_access: List[str],
+    people: List[str],
+    brands: List[str],
+    event: List[str],
+    tone: List[str],
+    context: List[str],
+    overall_team: List[str],
+    audio_format: List[str],
+) -> pd.DataFrame:
+    """Build DataFrame formatted precisely as documented in models/reference.md."""
+    desc_json_dict = {
+        "play_by_play": play_by_play.strip() if play_by_play else "",
+        "content_theme": content_theme,
+        "format_access": format_access,
+        "people": people,
+        "brands": brands,
+        "event": event,
+        "tone": tone,
+        "context": context,
+        "overall_team": overall_team,
+        "audio_format": audio_format,
     }
-})();
-</script>
-"""
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+    row = {
+        "campaign": "Organic | Website",
+        "year": 2025,
+        "page": page if page else "ABXV",
+        "platform": platform if platform else "FB",
+        "media_type": "Short Video",
+        "category_l0": "No Hashtag",
+        "category_l1": "No Hashtag",
+        "category_l2": "No Hashtag",
+        "url": "https://example.com/dummy-reel",
+        "content": caption.strip() if caption else "",
+        "cost_nzd": None,
+        "views": 123,
+        "engagement": 456,
+        "hours": 64.0,
+        "description_json": json.dumps(desc_json_dict),
+        "duration_seconds": float(duration_seconds),
+    }
+
+    return pd.DataFrame([row])
 
 
 # ---------------------------------------------------------------------------
-# Callbacks for Safe State Updates (Before Widget Instantiation)
+# SECTION 1: CONTENT & CREATIVE
 # ---------------------------------------------------------------------------
-DEFAULT_DESC = "A male rugby player sprints downfield, breaks a tackle and scores a try under the posts."
+st.markdown(
+    """
+<div class="section-header">
+    <div class="section-tag">Section 1</div>
+    <div class="section-title">Creative Content</div>
+    <div class="section-subtitle">Define the video action narrative and post caption.</div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
-if "video_description" not in st.session_state:
-    st.session_state.video_description = DEFAULT_DESC
+col_s1_a, col_s1_b = st.columns(2, gap="medium")
 
-if "metadata" not in st.session_state:
-    st.session_state.metadata = infer_metadata(st.session_state.video_description)
-
-if "prediction_result" not in st.session_state:
-    st.session_state.prediction_result = None
-
-if "active_view_platform" not in st.session_state:
-    st.session_state.active_view_platform = None
-
-
-
-def sync_metadata_from_description() -> None:
-    """Auto-generate and synchronize all metadata fields from the current video description."""
-    desc = st.session_state.get("page1_desc_textarea", st.session_state.video_description)
-    st.session_state.video_description = desc
-
-    meta = infer_metadata(desc)
-    st.session_state.metadata = meta
-
-    # Sync all Page 2 form widget keys
-    st.session_state.input_title = meta.get("title", desc[:60])
-    st.session_state.input_platform = "ALL"
-    st.session_state.input_page = meta.get("page", "All Blacks")
-    st.session_state.input_duration = float(meta.get("duration_seconds", 20.0))
-    st.session_state.input_themes = [t for t in (meta.get("content_theme") or []) if t in THEME_OPTIONS] or ["rugby_skills"]
-    st.session_state.input_formats = [f for f in (meta.get("format_access") or []) if f in FORMAT_OPTIONS] or ["highlight"]
-    st.session_state.input_tones = [t for t in (meta.get("tone") or []) if t in TONE_OPTIONS] or ["excitement"]
-    st.session_state.input_people = [p for p in meta.get("people", ["all blacks"]) if p in PEOPLE_OPTIONS] or ["all blacks"]
-    st.session_state.input_brands = [b for b in meta.get("brands", ["adidas"]) if b in BRAND_OPTIONS] or ["adidas"]
-    st.session_state.input_context = meta.get("context", ["match day"])[0] if meta.get("context") else "match day"
-    st.session_state.input_team = meta.get("overall_team", ["men"])[0] if meta.get("overall_team") else "men"
-    st.session_state.input_audio = meta.get("audio_format", ["ambient"])[0] if meta.get("audio_format") else "ambient"
-
-
-def apply_demo_preset(prompt_text: str) -> None:
-    """Callback executed before widgets instantiate to update session state with a demo preset."""
-    st.session_state.video_description = prompt_text
-    st.session_state.page1_desc_textarea = prompt_text
-
-    meta = infer_metadata(prompt_text)
-    st.session_state.metadata = meta
-
-    st.session_state.input_title = meta.get("title", prompt_text[:60])
-    st.session_state.input_platform = "ALL"
-    st.session_state.input_page = meta.get("page", "All Blacks")
-    st.session_state.input_duration = float(meta.get("duration_seconds", 20.0))
-    st.session_state.input_themes = [t for t in (meta.get("content_theme") or []) if t in THEME_OPTIONS] or ["try"]
-    st.session_state.input_formats = [f for f in meta.get("format_access", []) if f in FORMAT_OPTIONS] or ["highlight"]
-    st.session_state.input_tones = [t for t in (meta.get("tone") or []) if t in TONE_OPTIONS] or ["excitement"]
-    st.session_state.input_people = [p for p in meta.get("people", ["all blacks"]) if p in PEOPLE_OPTIONS] or ["all blacks"]
-    st.session_state.input_brands = [b for b in meta.get("brands", ["adidas"]) if b in BRAND_OPTIONS] or ["adidas"]
-    st.session_state.input_context = meta.get("context", ["match day"])[0] if meta.get("context") else "match day"
-    st.session_state.input_team = meta.get("overall_team", ["men"])[0] if meta.get("overall_team") else "men"
-    st.session_state.input_audio = meta.get("audio_format", ["ambient"])[0] if meta.get("audio_format") else "ambient"
-
-
-def load_history_record(record_id: int) -> None:
-    """Callback executed to load a past run from SQLite database."""
-    full_rec = get_prediction(record_id)
-    if full_rec and full_rec.get("full_payload"):
-        st.session_state.prediction_result = full_rec.get("full_payload")
-        if full_rec.get("metadata"):
-            meta = full_rec.get("metadata")
-            st.session_state.metadata = meta
-            desc = full_rec.get("description", meta.get("description", ""))
-            st.session_state.video_description = desc
-            st.session_state.page1_desc_textarea = desc
-            st.session_state.input_title = meta.get("title", "")
-            st.session_state.input_platform = meta.get("platform", "ALL")
-            st.session_state.input_page = meta.get("page", "All Blacks")
-            st.session_state.input_duration = float(meta.get("duration_seconds", 20.0))
-            st.session_state.input_themes = [t for t in (meta.get("content_theme") or []) if t in THEME_OPTIONS] or ["try"]
-            st.session_state.input_formats = [f for f in meta.get("format_access", []) if f in FORMAT_OPTIONS] or ["highlight"]
-            st.session_state.input_tones = [t for t in (meta.get("tone") or []) if t in TONE_OPTIONS] or ["excitement"]
-            st.session_state.input_people = [p for p in meta.get("people", ["all blacks"]) if p in PEOPLE_OPTIONS] or ["all blacks"]
-            st.session_state.input_brands = [b for b in meta.get("brands", ["adidas"]) if b in BRAND_OPTIONS] or ["adidas"]
-            st.session_state.active_view_platform = None
-
-
-
-# ---------------------------------------------------------------------------
-# Validation Helper
-# ---------------------------------------------------------------------------
-def validate_inputs(
-    desc: str, title: str, themes: List[str], formats: List[str], tones: List[str]
-) -> Tuple[bool, List[str]]:
-    """Verify that all required fields for model prediction are filled."""
-    missing = []
-    if not desc or len(desc.strip()) < 5:
-        missing.append("Video Description on Page 1 (at least 5 characters)")
-    if not title or len(title.strip()) < 2:
-        missing.append("Caption / Post Title on Page 2")
-    if not themes:
-        missing.append("At least 1 Content Theme on Page 2")
-    if not formats:
-        missing.append("At least 1 Format / Access tag on Page 2")
-    if not tones:
-        missing.append("At least 1 Tone tag on Page 2")
-
-    is_valid = len(missing) == 0
-    return is_valid, missing
-
-
-# ===========================================================================
-# PAGE 1: CONCEPT STUDIO
-# ===========================================================================
-st.markdown("<div id='section-1'></div>", unsafe_allow_html=True)
-container_p1 = st.container(key="section-1")
-with container_p1:
-    st.markdown(
-        """
-        <div class="section-header">
-            <div class="section-tag">01 · Concept Studio</div>
-            <div class="section-title">Describe Your Video Idea</div>
-            <div class="section-desc">Type your post concept in plain English. The model auto-detects rugby entities, format, tone, and duration, then evaluates reach across all platforms.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+with col_s1_a:
+    video_description = st.text_area(
+        "Video Description (Play-by-play)",
+        value="A male rugby player sprints downfield, breaks a tackle and scores a try under the posts.",
+        height=130,
+        help="Detailed play-by-play visual and action sequence (maps to description_json.play_by_play).",
     )
 
-    # Composer Card
-    with st.container(border=True):
-        desc_input = st.text_area(
-            label="Video Concept & Storyline",
-            value=st.session_state.video_description,
-            height=120,
-            placeholder="e.g. A male rugby player sprints downfield, breaks a tackle, grounds the ball for a try, and the team celebrates with the crowd...",
-            key="page1_desc_textarea",
-            on_change=sync_metadata_from_description,
-            label_visibility="collapsed",
+with col_s1_b:
+    post_caption = st.text_area(
+        "Caption (Post Copy)",
+        value="@jacobkneepkens crosses the chalk 🤙 #AllBlacks #TryTime",
+        height=130,
+        help="Social media caption, hashtags, and mentions (maps to DataFrame content).",
+    )
+
+# ---------------------------------------------------------------------------
+# SECTION 2: PARAMETERS (Part A & Part B)
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+<div class="section-header">
+    <div class="section-tag">Section 2</div>
+    <div class="section-title">Model Parameters & Taxonomy</div>
+    <div class="section-subtitle">Configure target channel distribution and description_json metadata.</div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+# Part A: Target Platform, Account/Channel, Duration
+with st.container(border=True):
+    st.markdown('<div style="font-size:0.92rem; font-weight:700; color:#0D0D0D; margin-bottom:0.75rem;">Part A: Target Distribution & Duration</div>', unsafe_allow_html=True)
+    col_pA1, col_pA2, col_pA3 = st.columns([1.2, 1.2, 1], gap="medium")
+
+    with col_pA1:
+        selected_platforms = st.multiselect(
+            "Target Platform(s)",
+            options=["FB", "IG", "TT", "YT"],
+            default=[],  # Default to nothing selected as requested
+            format_func=lambda x: f"{x} - {PLATFORM_NAMES.get(x, x)}",
+            help="Select one or more platforms to evaluate (defaults to nothing selected).",
         )
 
-        col_act1, col_act2 = st.columns([1, 1])
-        with col_act1:
-            st.button(
-                "⚡ Auto-Detect Attributes",
-                key="btn_autogen_meta",
-                on_click=sync_metadata_from_description,
-                use_container_width=True,
+    with col_pA2:
+        selected_pages = st.multiselect(
+            "Account / Channel",
+            options=PAGE_OPTIONS,
+            default=[],  # Default to nothing selected as requested
+            help="Target team or brand channel (defaults to nothing selected).",
+        )
+
+    with col_pA3:
+        duration_sec = st.number_input(
+            "Duration (seconds)",
+            min_value=1.0,
+            max_value=300.0,
+            value=20.0,  # Default to 20 as requested
+            step=1.0,
+            help="Runtime of the video clip in seconds (default: 20).",
+        )
+
+# Part B: description_json fields
+with st.container(border=True):
+    st.markdown('<div style="font-size:0.92rem; font-weight:700; color:#0D0D0D; margin-bottom:0.75rem;">Part B: description_json Fields</div>', unsafe_allow_html=True)
+
+    col_pB1, col_pB2, col_pB3 = st.columns(3, gap="medium")
+
+    with col_pB1:
+        sel_theme = st.multiselect("Content Theme", options=THEME_OPTIONS, default=["try", "celebration"])
+        sel_format = st.multiselect("Format Access", options=FORMAT_OPTIONS, default=["highlight"])
+        sel_people = st.multiselect("People / Entities", options=PEOPLE_OPTIONS, default=["all blacks"])
+
+    with col_pB2:
+        sel_brands = st.multiselect("Brands / Sponsors", options=BRAND_OPTIONS, default=[])
+        sel_event = st.multiselect("Event / Competition", options=EVENT_OPTIONS, default=[])
+        sel_tone = st.multiselect("Tone", options=TONE_OPTIONS, default=["excitement"])
+
+    with col_pB3:
+        sel_context = st.multiselect("Context / Setting", options=CONTEXT_OPTIONS, default=["stadium", "match day"])
+        sel_team = st.multiselect("Overall Team", options=TEAM_OPTIONS, default=["men"])
+        sel_audio = st.multiselect("Audio Format", options=AUDIO_OPTIONS, default=["ambient"])
+
+# ---------------------------------------------------------------------------
+# Storage / Persistence Helper
+# ---------------------------------------------------------------------------
+HISTORY_FILE = REPO_ROOT / "prediction_history.json"
+
+def save_prediction_record(record: Dict[str, Any]) -> None:
+    """Append a prediction run to a local JSON history file."""
+    history = []
+    if HISTORY_FILE.exists():
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                history = json.load(f)
+        except Exception:
+            history = []
+    history.append(record)
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        st.warning(f"Could not write history to disk: {e}")
+
+
+def load_prediction_history() -> List[Dict[str, Any]]:
+    """Load historical prediction records."""
+    if HISTORY_FILE.exists():
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+# Predict Trigger Button
+st.markdown("<div style='margin: 1.25rem 0;'></div>", unsafe_allow_html=True)
+run_btn = st.button("🚀 Run Model Inference", use_container_width=True, type="primary")
+
+# ---------------------------------------------------------------------------
+# Inference Execution & Results
+# ---------------------------------------------------------------------------
+# Determine active platforms and page for evaluation
+eval_platforms = selected_platforms if len(selected_platforms) > 0 else ["FB", "IG", "TT", "YT"]
+eval_page = selected_pages[0] if len(selected_pages) > 0 else "All Blacks"
+
+if "last_results" not in st.session_state:
+    st.session_state.last_results = None
+
+# If user clicked the button or results exist in session state
+if run_btn:
+    with st.status("🎬 Processing video concept through ML models...", expanded=True) as status:
+        st.write("1. Building feature representations from play-by-play narrative and metadata...")
+        results_by_platform: Dict[str, Dict[str, Any]] = {}
+
+        for p_code in eval_platforms:
+            st.write(f"2. Evaluating **{PLATFORM_NAMES.get(p_code, p_code)} ({p_code})** with Support Vector Regression and Classifier...")
+            df_single = build_model_dataframe(
+                caption=post_caption,
+                play_by_play=video_description,
+                platform=p_code,
+                page=eval_page,
+                duration_seconds=duration_sec,
+                content_theme=sel_theme,
+                format_access=sel_format,
+                people=sel_people,
+                brands=sel_brands,
+                event=sel_event,
+                tone=sel_tone,
+                context=sel_context,
+                overall_team=sel_team,
+                audio_format=sel_audio,
             )
-        with col_act2:
+
+            try:
+                lin_res = predict_lin(df_single)[0]
+                clas_res = predict_clas(df_single)[0]
+                results_by_platform[p_code] = {
+                    "lin": lin_res,
+                    "clas": clas_res,
+                }
+            except Exception as e:
+                st.error(f"Inference error for {p_code}: {e}")
+
+        # Save to session and disk
+        st.session_state.last_results = {
+            "results": results_by_platform,
+            "platforms": eval_platforms,
+            "page": eval_page,
+            "caption": post_caption,
+            "video_description": video_description,
+            "duration": duration_sec,
+        }
+
+        # Save to persistent history file
+        import datetime
+        record = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "video_description": video_description,
+            "caption": post_caption,
+            "account_page": eval_page,
+            "duration_seconds": duration_sec,
+            "metadata": {
+                "content_theme": sel_theme,
+                "format_access": sel_format,
+                "people": sel_people,
+                "brands": sel_brands,
+                "event": sel_event,
+                "tone": sel_tone,
+                "context": sel_context,
+                "overall_team": sel_team,
+                "audio_format": sel_audio,
+            },
+            "evaluations": {
+                p: {
+                    "projected_views": results_by_platform[p]["lin"].get("views"),
+                    "projected_engagement": results_by_platform[p]["lin"].get("engagement"),
+                    "quadrant_views": results_by_platform[p]["clas"].get("views"),
+                    "quadrant_engagement": results_by_platform[p]["clas"].get("engagement"),
+                }
+                for p in results_by_platform
+            }
+        }
+        save_prediction_record(record)
+        status.update(label="✅ Inference complete! Performance estimates calculated.", state="complete", expanded=False)
+
+# ---------------------------------------------------------------------------
+# SECTION 3: OUTPUT (Part A: 2x2 Quadrant, Part B: Regressions, Part C: Calculator)
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+<div class="section-header">
+    <div class="section-tag">Section 3</div>
+    <div class="section-title">Model Output & Performance Insights</div>
+    <div class="section-subtitle">Quadrant classification, regression estimates, and production budget calculator.</div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+if not st.session_state.last_results:
+    st.info("👈 Configure your creative content and parameters above, then click **'🚀 Run Model Inference'** to generate predictions.")
+else:
+    active_run = st.session_state.last_results
+    results_by_platform = active_run["results"]
+    eval_platforms = active_run["platforms"]
+    eval_page = active_run["page"]
+
+    # Build tabs: All Platforms master comparison + individual platform tabs
+    all_tab_labels = ["🌐 All Platforms (Overview)"] + [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in eval_platforms]
+    tabs = st.tabs(all_tab_labels)
+
+    # -----------------------------------------------------------------------
+    # TAB 0: ALL PLATFORMS MASTER OVERVIEW
+    # -----------------------------------------------------------------------
+    with tabs[0]:
+        st.markdown(
+            f"""
+            <div style="background:#FFFFFF; border:1px solid rgba(0,0,0,0.1); border-radius:12px; padding:1.2rem 1.4rem; margin-bottom:1.25rem; display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <div style="font-size:1.2rem; font-weight:700; color:#0D0D0D;">Cross-Platform Strategic Comparison</div>
+                    <div style="font-size:0.82rem; color:#555555;">Target Account: <b style="color:#0D0D0D;">{eval_page}</b> · Duration: <b style="color:#0D0D0D;">{duration_sec:.0f}s</b> · Evaluating <b>{len(eval_platforms)} Platforms</b></div>
+                </div>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                    {' '.join([f'<span style="display:inline-block; padding:0.25rem 0.5rem; background:#F1F5F9; border-radius:6px; font-size:0.75rem; font-weight:700;">{p}</span>' for p in eval_platforms])}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Cross-platform Master Quadrant
+        with st.container(border=True):
             st.markdown(
-                '<a href="#section-2" target="_self" class="nav-action-primary">Continue to Parameters →</a>',
+                """
+                <div style="margin-bottom:0.6rem;">
+                    <div style="font-size:0.95rem; font-weight:700; color:#0D0D0D;">Part A: All-Platform Comparative Performance Matrix</div>
+                    <div style="font-size:0.8rem; color:#6B7280;">Simultaneous positioning of all platforms across continuous Views (X) and Engagements (Y).</div>
+                </div>
+                """,
                 unsafe_allow_html=True,
             )
 
-    # Preset Chips
-    st.markdown('<div style="font-size:0.8rem; font-weight:600; color:#555555; margin-top:1.2rem; margin-bottom:0.6rem;">Preset Examples</div>', unsafe_allow_html=True)
-    col_demo1, col_demo2, col_demo3, col_demo4 = st.columns(4)
-    demo_cols = [col_demo1, col_demo2, col_demo3, col_demo4]
-    for i, demo in enumerate(DEMO_PROMPTS):
-        with demo_cols[i]:
-            st.button(
-                f"{demo['label']}\n— {demo['desc']}",
-                key=f"demo_btn_{i}",
-                on_click=apply_demo_preset,
-                args=(demo["text"],),
-                use_container_width=True,
-            )
+            fig_all = go.Figure()
 
+            # Global boundaries based on all predictions
+            all_v = [max(0.0, float(results_by_platform[p]["lin"].get("views", 0.0))) for p in eval_platforms]
+            all_e = [max(0.0, float(results_by_platform[p]["lin"].get("engagement", 0.0))) for p in eval_platforms]
+            
+            ref_v = 28000
+            ref_e = 1000
+            max_v_all = max(max(all_v) * 1.3, ref_v * 2.2, 50000)
+            max_e_all = max(max(all_e) * 1.3, ref_e * 2.2, 2500)
 
-# ===========================================================================
-# PAGE 2: PARAMETERS & METADATA (Streamlined 2-Column Symmetrical Layout)
-# ===========================================================================
-st.markdown("<div id='section-2'></div>", unsafe_allow_html=True)
-container_p2 = st.container(key="section-2")
-with container_p2:
-    st.markdown(
-        """
-        <div class="section-header">
-            <div class="section-tag">02 · Parameters & Metadata</div>
-            <div class="section-title">Refine Video Attributes</div>
-            <div class="section-desc">Auto-extracted from your concept description. By default evaluates across all 4 platforms simultaneously. You can tweak any setting before running predictions.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            # Quadrant Zones
+            fig_all.add_shape(type="rect", x0=0, x1=ref_v, y0=0, y1=ref_e, fillcolor="rgba(244, 63, 94, 0.035)", line=dict(width=0))
+            fig_all.add_shape(type="rect", x0=0, x1=ref_v, y0=ref_e, y1=max_e_all * 1.25, fillcolor="rgba(245, 158, 11, 0.045)", line=dict(width=0))
+            fig_all.add_shape(type="rect", x0=ref_v, x1=max_v_all * 1.25, y0=0, y1=ref_e, fillcolor="rgba(59, 130, 246, 0.045)", line=dict(width=0))
+            fig_all.add_shape(type="rect", x0=ref_v, x1=max_v_all * 1.25, y0=ref_e, y1=max_e_all * 1.25, fillcolor="rgba(16, 185, 129, 0.065)", line=dict(width=0))
 
-    current_meta = st.session_state.metadata
+            # Reference Lines
+            fig_all.add_vline(x=ref_v, line=dict(color="rgba(15, 23, 42, 0.25)", width=1.5, dash="dot"))
+            fig_all.add_hline(y=ref_e, line=dict(color="rgba(15, 23, 42, 0.25)", width=1.5, dash="dot"))
 
-    col_left, col_right = st.columns(2, gap="medium")
+            # Corner Annotations
+            fig_all.add_annotation(x=ref_v * 0.48, y=max_e_all * 1.1, text="<b>NICHE / DISCUSSION</b>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#A16207"))
+            fig_all.add_annotation(x=ref_v + (max_v_all - ref_v) * 0.52, y=max_e_all * 1.1, text="<b>OPTIMAL VIRAL HIT</b>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#15803D"))
+            fig_all.add_annotation(x=ref_v * 0.48, y=ref_e * 0.16, text="<b>LOW SIGNAL</b>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#BE123C"))
+            fig_all.add_annotation(x=ref_v + (max_v_all - ref_v) * 0.52, y=ref_e * 0.16, text="<b>BROAD AWARENESS</b>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#1D4ED8"))
 
-    with col_left:
-        # Card 1: Distribution & Setting
-        with st.container(border=True):
-            st.markdown('<div class="card-title">📱 Distribution & Setting</div>', unsafe_allow_html=True)
-
-            meta_title = st.text_input(
-                "Post Caption / Title",
-                value=current_meta.get("title") or (st.session_state.video_description[:60] if st.session_state.video_description else ""),
-                key="input_title",
-                help="The primary caption or headline.",
-            )
-
-            col_p1, col_p2 = st.columns(2)
-            with col_p1:
-                curr_plat = current_meta.get("platform", "ALL")
-                plat_idx = PLATFORM_KEYS.index(curr_plat) if curr_plat in PLATFORM_KEYS else 0
-                meta_platform = st.selectbox(
-                    "Target Platform",
-                    options=PLATFORM_KEYS,
-                    index=plat_idx,
-                    format_func=lambda x: f"{PLATFORM_LABELS.get(x, x)}",
-                    key="input_platform",
-                )
-
-            with col_p2:
-                available_pages = PLATFORM_PAGES.get(meta_platform, PLATFORM_PAGES["ALL"])
-                curr_page = current_meta.get("page", "All Blacks")
-                page_idx = available_pages.index(curr_page) if curr_page in available_pages else 0
-
-                meta_page = st.selectbox(
-                    "Account / Channel",
-                    options=available_pages,
-                    index=page_idx,
-                    key="input_page",
-                )
-
-            meta_duration = st.slider(
-                "Duration (seconds)",
-                min_value=5.0,
-                max_value=120.0,
-                value=float(current_meta.get("duration_seconds", 20.0)),
-                step=1.0,
-                key="input_duration",
-            )
-
-            # Match Context & Team Tier & Audio
-            curr_ctx = current_meta.get("context", ["match day"])[0] if current_meta.get("context") else "match day"
-            ctx_idx = CONTEXT_OPTIONS.index(curr_ctx) if curr_ctx in CONTEXT_OPTIONS else 0
-            meta_context = st.selectbox(
-                "Match Context",
-                options=CONTEXT_OPTIONS,
-                index=ctx_idx,
-                key="input_context",
-                help="Setting or occasion from describe_rob schema.",
-            )
-
-            col_s1, col_s2 = st.columns(2)
-            with col_s1:
-                curr_team = current_meta.get("overall_team", ["men"])[0] if current_meta.get("overall_team") else "men"
-                team_idx = TEAM_OPTIONS.index(curr_team) if curr_team in TEAM_OPTIONS else 0
-                meta_team = st.selectbox(
-                    "Team Tier",
-                    options=TEAM_OPTIONS,
-                    index=team_idx,
-                    key="input_team",
-                )
-            with col_s2:
-                curr_aud = current_meta.get("audio_format", ["ambient"])[0] if current_meta.get("audio_format") else "ambient"
-                aud_idx = AUDIO_OPTIONS.index(curr_aud) if curr_aud in AUDIO_OPTIONS else 0
-                meta_audio = st.selectbox(
-                    "Audio Format",
-                    options=AUDIO_OPTIONS,
-                    index=aud_idx,
-                    key="input_audio",
-                )
-
-    with col_right:
-        # Card 2: Content & Entities
-        with st.container(border=True):
-            st.markdown('<div class="card-title">🎯 Content & Entities</div>', unsafe_allow_html=True)
-
-            inferred_themes = [t for t in (current_meta.get("content_theme") or []) if t in THEME_OPTIONS]
-            meta_themes = st.multiselect(
-                "Content Themes",
-                options=THEME_OPTIONS,
-                default=inferred_themes or ["rugby_skills"],
-                key="input_themes",
-            )
-
-            inferred_formats = [f for f in (current_meta.get("format_access") or []) if f in FORMAT_OPTIONS]
-            meta_formats = st.multiselect(
-                "Format & Access",
-                options=FORMAT_OPTIONS,
-                default=inferred_formats or ["highlight"],
-                key="input_formats",
-            )
-
-            inferred_tones = [t for t in (current_meta.get("tone") or []) if t in TONE_OPTIONS]
-            meta_tones = st.multiselect(
-                "Emotional Tone",
-                options=TONE_OPTIONS,
-                default=inferred_tones or ["excitement"],
-                key="input_tones",
-            )
-
-            # People Multi-Dropdown / Search
-            inferred_people = [p for p in (current_meta.get("people") or []) if p in PEOPLE_OPTIONS]
-            meta_people = st.multiselect(
-                "People / Players",
-                options=PEOPLE_OPTIONS,
-                default=inferred_people or ["all blacks"],
-                key="input_people",
-                help="Search and select featured players or teams.",
-            )
-
-            # Brands Multi-Dropdown / Search
-            inferred_brands = [b for b in (current_meta.get("brands") or []) if b in BRAND_OPTIONS]
-            meta_brands = st.multiselect(
-                "Brands / Sponsors",
-                options=BRAND_OPTIONS,
-                default=inferred_brands or ["adidas"],
-                key="input_brands",
-                help="Search and select sponsors or featured brands.",
-            )
-
-    # Validation Status
-    is_valid, missing_fields = validate_inputs(
-        st.session_state.video_description,
-        meta_title,
-        meta_themes,
-        meta_formats,
-        meta_tones,
-    )
-
-    if not is_valid:
-        missing_list_str = " · ".join(missing_fields)
-        st.markdown(
-            f"<div class='val-box-invalid'><b>Required inputs missing:</b> {missing_list_str}</div>",
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            f"<div class='val-box-valid'>Ready to evaluate <b>{PLATFORM_LABELS.get(meta_platform, meta_platform)}</b> on <b>{meta_page}</b>.</div>",
-            unsafe_allow_html=True,
-        )
-
-    # Action Row
-    col_nav1, col_nav2 = st.columns([1, 2], gap="medium")
-    with col_nav1:
-        st.markdown(
-            '<a href="#section-1" target="_self" class="nav-action-secondary">← Back to Concept</a>',
-            unsafe_allow_html=True,
-        )
-
-    with col_nav2:
-        btn_label = "Generate Multi-Platform Score →" if meta_platform == "ALL" else f"Generate Score for {meta_platform} →"
-        gen_btn = st.button(
-            btn_label,
-            key="btn_run_predict",
-            type="primary",
-            disabled=not is_valid,
-            use_container_width=True,
-        )
-        if gen_btn and is_valid:
-            payload = {
-                "title": meta_title,
-                "description": st.session_state.video_description,
-                "platform": meta_platform,
-                "page": meta_page,
-                "duration_seconds": float(meta_duration),
-                "year": 2025,
-                "category_l0": "No Hashtag",
-                "category_l1": "No Hashtag",
-                "category_l2": "No Hashtag",
-                "content_theme": meta_themes,
-                "content_themes": meta_themes,
-                "format_access": meta_formats,
-                "tone": meta_tones,
-                "tones": meta_tones,
-                "people": meta_people if meta_people else ["all blacks"],
-                "brands": meta_brands if meta_brands else ["adidas"],
-                "event": [meta_page.lower()],
-                "context": [meta_context],
-                "overall_team": [meta_team],
-                "audio_format": [meta_audio],
-                "cost": 0.0,
-                "expected_rpm": 3.0,
-                "expected_cpm": 5.0,
+            PLATFORM_PALETTE = {
+                "FB": "#1877F2",
+                "IG": "#E1306C",
+                "TT": "#000000",
+                "YT": "#FF0000",
             }
 
-            st.session_state.metadata = payload
+            # Plot every evaluated platform concurrently
+            for p in eval_platforms:
+                p_v = max(0.0, float(results_by_platform[p]["lin"].get("views", 0.0)))
+                p_e = max(0.0, float(results_by_platform[p]["lin"].get("engagement", 0.0)))
+                p_col = PLATFORM_PALETTE.get(p, "#2563EB")
 
-            with st.spinner("Calculating performance across platforms..."):
-                result = run_prediction_pipeline(payload, save_to_db=True)
-                st.session_state.prediction_result = result
-                st.session_state.selected_view_platform = result.get("best_platform", "FB") if payload["platform"] == "ALL" else payload["platform"]
+                # Halo ring
+                fig_all.add_trace(
+                    go.Scatter(
+                        x=[p_v],
+                        y=[p_e],
+                        mode="markers",
+                        marker=dict(size=32, color=p_col, opacity=0.2),
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
 
+                # Solid point
+                fig_all.add_trace(
+                    go.Scatter(
+                        x=[p_v],
+                        y=[p_e],
+                        mode="markers+text",
+                        marker=dict(size=18, color=p_col, symbol="circle", line=dict(color="#FFFFFF", width=2.5)),
+                        text=[f"<b>{PLATFORM_NAMES.get(p, p)}</b>"],
+                        textposition="bottom center",
+                        textfont=dict(size=10.5, color="#0F172A", family="Inter, sans-serif"),
+                        name=PLATFORM_NAMES.get(p, p),
+                        showlegend=False,
+                    )
+                )
 
-
-# ===========================================================================
-# PAGE 3: PERFORMANCE FORECAST & BENCHMARKS
-# ===========================================================================
-st.markdown("<div id='section-3'></div>", unsafe_allow_html=True)
-container_p3 = st.container(key="section-3")
-with container_p3:
-    st.markdown(
-        """
-        <div class="section-header">
-            <div class="section-tag">03 · Performance Forecast</div>
-            <div class="section-title">Model Verdict & Cross-Platform Metrics</div>
-            <div class="section-desc">Comprehensive reach projections, engagement probabilities, and platform ranking based on historical rugby performance.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    result = st.session_state.prediction_result
-
-    if not result:
-        with st.container(border=True):
-            st.markdown(
-                "<div style='text-align:center; padding:2rem 1rem;'>"
-                "<div style='font-size:1.1rem; font-weight:600; color:#0D0D0D; margin-bottom:0.35rem;'>Forecast Locked</div>"
-                "<div style='font-size:0.88rem; color:#555555; max-width:440px; margin:0 auto 1.25rem auto; line-height:1.5;'>"
-                "Complete your video concept and metadata above, then click <b>'Generate Score'</b> to unlock cross-platform predictions."
-                "</div>"
-                "</div>",
-                unsafe_allow_html=True,
+            fig_all.update_layout(
+                height=420,
+                margin=dict(l=50, r=30, t=20, b=45),
+                paper_bgcolor="#FFFFFF",
+                plot_bgcolor="#FAFAFC",
+                hovermode=False,
+                xaxis=dict(
+                    title="<b>Predicted Views (All Platforms)</b>",
+                    title_font=dict(size=11, color="#64748B", family="Inter, sans-serif"),
+                    range=[0, max_v_all * 1.15],
+                    showgrid=False,
+                    zeroline=False,
+                    fixedrange=True,
+                    tickformat=",.0f",
+                    tickfont=dict(size=10, color="#64748B"),
+                ),
+                yaxis=dict(
+                    title="<b>Predicted Engagements (All Platforms)</b>",
+                    title_font=dict(size=11, color="#64748B", family="Inter, sans-serif"),
+                    range=[0, max_e_all * 1.15],
+                    showgrid=False,
+                    zeroline=False,
+                    fixedrange=True,
+                    tickformat=",.0f",
+                    tickfont=dict(size=10, color="#64748B"),
+                ),
             )
-            col_lk1, col_lk2, col_lk3 = st.columns([1, 1.2, 1])
-            with col_lk2:
+
+            st.plotly_chart(fig_all, use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
+
+        # Cross-platform Comparative Table (Parts B & C Overview)
+        with st.container(border=True):
+            st.markdown('<div style="font-size:0.95rem; font-weight:700; color:#0D0D0D; margin-bottom:0.75rem;">Platform Comparison & Value Summary ($500 Standard Budget)</div>', unsafe_allow_html=True)
+            
+            comp_rows = []
+            for p in eval_platforms:
+                p_lin = results_by_platform[p]["lin"]
+                p_clas = results_by_platform[p]["clas"]
+                p_v = max(0.0, float(p_lin.get("views", 0.0)))
+                p_e = max(0.0, float(p_lin.get("engagement", 0.0)))
+                p_cpm = VIEWS_CPM.get(p, 10.0)
+                p_eng_rate = ENGAGEMENT_VALUE.get(p, 2.0)
+                gross_val = ((p_v / 1000.0) * p_cpm) + (p_e * p_eng_rate)
+                net_val = gross_val - 500.0
+                roi_val = ((gross_val - 500.0) / 500.0 * 100.0)
+
+                comp_rows.append({
+                    "Platform": f"{PLATFORM_NAMES.get(p, p)} ({p})",
+                    "Classification Tier": f"{p_clas.get('views')} · {p_clas.get('engagement')}",
+                    "Predicted Views": f"{p_v:,.0f}",
+                    "Predicted Engagements": f"{p_e:,.0f}",
+                    "Est. Media Value": f"${gross_val:,.2f}",
+                    "Net Value ($500 Spend)": f"${net_val:,.2f}",
+                    "ROI (%)": f"{'+' if roi_val >= 0 else ''}{roi_val:.1f}%",
+                })
+            
+            st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
+
+    # -----------------------------------------------------------------------
+    # TABS 1..N: INDIVIDUAL PLATFORM DEEP-DIVES
+    # -----------------------------------------------------------------------
+    for i, p_code in enumerate(eval_platforms):
+        with tabs[i + 1]:
+            p_data = results_by_platform[p_code]
+            lin = p_data["lin"]
+            clas = p_data["clas"]
+
+            pred_views = max(0.0, float(lin.get("views", 0.0)))
+            pred_eng = max(0.0, float(lin.get("engagement", 0.0)))
+            views_bin = clas.get("views", "views_0")
+            eng_bin = clas.get("engagement", "engagement_0")
+
+            # Parse 0/1 bin index
+            v_is_high = views_bin.endswith("1") or ("high" in views_bin.lower())
+            e_is_high = eng_bin.endswith("1") or ("high" in eng_bin.lower())
+
+            # Top Platform Header
+            p_name = PLATFORM_NAMES.get(p_code, p_code)
+            p_logo = PLATFORM_LOGOS.get(p_code, "")
+
+            header_html = (
+                f'<div style="background:#FFFFFF; border:1px solid rgba(0,0,0,0.1); border-radius:12px; padding:1.2rem 1.4rem; margin-bottom:1.25rem; display:flex; justify-content:space-between; align-items:center;">'
+                f'<div style="display:flex; align-items:center; gap:0.9rem;">'
+                f'<div style="transform:scale(1.3); display:flex; align-items:center;">{p_logo}</div>'
+                f'<div>'
+                f'<div style="font-size:1.2rem; font-weight:700; color:#0D0D0D;">{p_name} Evaluation</div>'
+                f'<div style="font-size:0.82rem; color:#555555;">Target Account: <b style="color:#0D0D0D;">{eval_page}</b> · Duration: <b style="color:#0D0D0D;">{duration_sec:.0f}s</b></div>'
+                f'</div>'
+                f'</div>'
+                f'<div style="text-align:right;">'
+                f'<div style="font-size:0.75rem; font-weight:600; color:#555555; text-transform:uppercase;">Classification Bin</div>'
+                f'<div style="font-size:1.15rem; font-weight:800; color:#0D0D0D;">{views_bin} / {eng_bin}</div>'
+                f'</div>'
+                f'</div>'
+            )
+            st.markdown(header_html, unsafe_allow_html=True)
+
+            # ---------------------------------------------------------------
+            # PART A: ELEGANT 2x2 PERFORMANCE QUADRANT & BENCHMARK MATRIX
+            # ---------------------------------------------------------------
+            with st.container(border=True):
                 st.markdown(
-                    '<a href="#section-2" target="_self" class="nav-action-primary">Complete Parameters →</a>',
+                    """
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem;">
+                        <div>
+                            <div style="font-size:0.95rem; font-weight:700; color:#0D0D0D;">Part A: Strategic Performance Matrix</div>
+                            <div style="font-size:0.8rem; color:#6B7280;">Continuous regression outputs mapped against historical rugby median benchmarks.</div>
+                        </div>
+                    </div>
+                    """,
                     unsafe_allow_html=True,
                 )
-    else:
-        saved_id = result.get("saved_id")
-        is_all = result.get("is_all_platforms", True)
-        best_platform = result.get("best_platform", "FB")
-        leaderboard = result.get("platform_leaderboard", [])
 
-        go_score = result.get("go_score", 0.0)
-        verdict = result.get("verdict", "borderline").lower()
-        verdict_msg = result.get("verdict_message", "Model evaluated your concept.")
+                # Platform benchmark medians (IQR empirical split thresholds)
+                PLATFORM_MEDIANS = {
+                    "FB": {"views": 15000, "eng": 450},
+                    "IG": {"views": 28000, "eng": 1200},
+                    "TT": {"views": 35000, "eng": 1800},
+                    "YT": {"views": 22000, "eng": 320},
+                }
 
-        if go_score >= 65:
-            score_class = "score-success"
-            tag_class = "status-green"
-            verdict_label = "Recommended · Strong Signal"
-        elif go_score >= 45:
-            score_class = "score-neutral"
-            tag_class = "status-gray"
-            verdict_label = "Borderline · Optimize Tags"
-        else:
-            score_class = "score-alert"
-            tag_class = "status-red"
-            verdict_label = "Low Signal · Review Concept"
+                current_med = PLATFORM_MEDIANS.get(p_code, {"views": 25000, "eng": 800})
+                med_views = current_med["views"]
+                med_eng = current_med["eng"]
 
-        # Hero Scorecard
-        hero_title = "Overall Multi-Platform Score" if is_all else f"{result.get('selected_platform')} Performance Score"
-        hero_html = (
-            f'<div class="scorecard-hero">'
-            f'<div>'
-            f'<div style="font-size:0.8rem; font-weight:600; color:#555555; text-transform:uppercase; letter-spacing:0.05em;">{hero_title}</div>'
-            f'<div class="scorecard-number {score_class}">{go_score}<span style="font-size:1.4rem; font-weight:500; color:#888888;">/100</span></div>'
-            f'<div class="status-badge {tag_class}">{verdict_label}</div>'
-            f'</div>'
-            f'<div style="max-width:520px; border-left:1px solid rgba(0,0,0,0.08); padding-left:1.5rem;">'
-            f'<div style="font-size:0.88rem; font-weight:600; color:#0D0D0D; margin-bottom:0.25rem;">Executive Summary</div>'
-            f'<div style="font-size:0.85rem; color:#555555; line-height:1.5;">{html.escape(verdict_msg)}</div>'
-            f'<div style="font-size:0.82rem; color:#0D0D0D; margin-top:0.5rem; font-weight:500;">Optimal Platform: <b>{best_platform}</b> ({PLATFORM_LABELS.get(best_platform, best_platform)})</div>'
-            f'</div>'
-            f'</div>'
-        )
-        st.markdown(hero_html, unsafe_allow_html=True)
+                # Build Sophisticated Continuous Scatter Quadrant Chart
+                fig_quad = go.Figure()
 
-        # 4-Platform Breakdown & Deep-Dive Tabs (Instant Client-Side Tab Switching)
-        st.markdown('<div style="font-size:0.88rem; font-weight:600; color:#0D0D0D; margin-bottom:0.75rem;">Cross-Platform Performance Matrix</div>', unsafe_allow_html=True)
+                # Determine dynamic axis ranges with padding
+                max_v = max(med_views * 2.2, pred_views * 1.3, 40000)
+                max_e = max(med_eng * 2.2, pred_eng * 1.3, 2000)
 
-        platforms_map = result.get("platforms", {})
-        tab_fb, tab_ig, tab_tt, tab_yt = st.tabs([
-            f"Facebook ({platforms_map.get('FB', {}).get('go_score', 0.0):.1f})",
-            f"Instagram ({platforms_map.get('IG', {}).get('go_score', 0.0):.1f})",
-            f"TikTok ({platforms_map.get('TT', {}).get('go_score', 0.0):.1f})",
-            f"YouTube ({platforms_map.get('YT', {}).get('go_score', 0.0):.1f})",
-        ])
-
-        tab_mapping = [
-            ("FB", "Facebook", tab_fb),
-            ("IG", "Instagram", tab_ig),
-            ("TT", "TikTok", tab_tt),
-            ("YT", "YouTube", tab_yt),
-        ]
-
-        for p_code, p_name, tab_ctx in tab_mapping:
-            with tab_ctx:
-                p_data = platforms_map.get(p_code, {})
-                p_score = p_data.get("go_score", 0.0)
-                p_views = (p_data.get("estimates") or {}).get("views", 0)
-                p_eng = (p_data.get("estimates") or {}).get("engagement", 0)
-                p_vp = (p_data.get("views") or {}).get("probability", 0.5)
-                p_ep = (p_data.get("engagement") or {}).get("probability", 0.5)
-                p_is_best = (p_code == best_platform)
-                p_logo = PLATFORM_LOGOS.get(p_code, "")
-                p_fit_exp = p_data.get("fit_explanation", "")
-
-                score_color = "#009E60" if p_score >= 65 else ("#555555" if p_score >= 45 else "#D32F2F")
-                badge_html = "<span style='font-size:0.72rem; font-weight:600; color:#007043; background:rgba(0,158,96,0.12); padding:0.2rem 0.6rem; border-radius:4px;'>★ BEST FIT PLATFORM</span>" if p_is_best else ""
-
-                # Top Platform Header Card
-                header_card_html = (
-                    f'<div style="background:#FFFFFF; border:1px solid rgba(0,0,0,0.1); border-radius:12px; padding:1.2rem 1.4rem; margin-bottom:1.25rem; display:flex; justify-content:space-between; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,0.03);">'
-                    f'<div style="display:flex; align-items:center; gap:0.9rem;">'
-                    f'<div style="transform:scale(1.3); display:flex; align-items:center;">{p_logo}</div>'
-                    f'<div>'
-                    f'<div style="display:flex; align-items:center; gap:0.6rem;">'
-                    f'<span style="font-size:1.15rem; font-weight:700; color:#0D0D0D;">{p_name}</span>'
-                    f'{badge_html}'
-                    f'</div>'
-                    f'<div style="font-size:0.8rem; color:#555555; margin-top:0.2rem;">Reach probability: <b style="color:#0D0D0D;">{p_vp*100:.0f}%</b> · Engagement probability: <b style="color:#0D0D0D;">{p_ep*100:.0f}%</b></div>'
-                    f'</div>'
-                    f'</div>'
-                    f'<div style="text-align:right;">'
-                    f'<div style="font-size:0.72rem; font-weight:600; color:#555555; text-transform:uppercase;">Platform Score</div>'
-                    f'<div style="font-size:2.2rem; font-weight:800; color:{score_color}; line-height:1;">{p_score:.1f}<span style="font-size:1rem; font-weight:500; color:#888888;">/100</span></div>'
-                    f'</div>'
-                    f'</div>'
+                # Quadrant Soft Background Fills
+                # Q4: Bottom-Left (Low Views, Low Engagement)
+                fig_quad.add_shape(
+                    type="rect", x0=0, x1=med_views, y0=0, y1=med_eng,
+                    fillcolor="rgba(244, 63, 94, 0.045)" if (not v_is_high and not e_is_high) else "rgba(244, 63, 94, 0.015)",
+                    line=dict(width=0),
                 )
-                st.markdown(header_card_html, unsafe_allow_html=True)
+                # Q2: Top-Left (Low Views, High Engagement)
+                fig_quad.add_shape(
+                    type="rect", x0=0, x1=med_views, y0=med_eng, y1=max_e * 1.25,
+                    fillcolor="rgba(245, 158, 11, 0.055)" if (not v_is_high and e_is_high) else "rgba(245, 158, 11, 0.015)",
+                    line=dict(width=0),
+                )
+                # Q3: Bottom-Right (High Views, Low Engagement)
+                fig_quad.add_shape(
+                    type="rect", x0=med_views, x1=max_v * 1.25, y0=0, y1=med_eng,
+                    fillcolor="rgba(59, 130, 246, 0.055)" if (v_is_high and not e_is_high) else "rgba(59, 130, 246, 0.015)",
+                    line=dict(width=0),
+                )
+                # Q1: Top-Right (High Views, High Engagement)
+                fig_quad.add_shape(
+                    type="rect", x0=med_views, x1=max_v * 1.25, y0=med_eng, y1=max_e * 1.25,
+                    fillcolor="rgba(16, 185, 129, 0.075)" if (v_is_high and e_is_high) else "rgba(16, 185, 129, 0.015)",
+                    line=dict(width=0),
+                )
 
-                # Lower Metrics: 50/50 Symmetrical Columns
-                col_res1, col_res2 = st.columns(2, gap="medium")
+                # Elegant Center Dividing Lines
+                fig_quad.add_vline(
+                    x=med_views,
+                    line=dict(color="rgba(15, 23, 42, 0.28)", width=1.5, dash="dot"),
+                )
+                fig_quad.add_hline(
+                    y=med_eng,
+                    line=dict(color="rgba(15, 23, 42, 0.28)", width=1.5, dash="dot"),
+                )
 
-                with col_res1:
-                    with st.container(border=True):
-                        st.markdown(
-                            f'<div class="card-title">📈 Detailed Metrics: {p_name}</div>',
-                            unsafe_allow_html=True,
+                # Quadrant Soft Badges / Labels
+                fig_quad.add_annotation(
+                    x=med_views * 0.48, y=max_e * 1.08,
+                    text="<b>NICHE / DISCUSSION</b><br><span style='font-size:10px; color:#854D0E;'>High Engagement · Sub-Median Views</span>",
+                    showarrow=False, font=dict(family="Inter, system-ui, sans-serif", size=10.5, color="#A16207")
+                )
+                fig_quad.add_annotation(
+                    x=med_views + (max_v - med_views) * 0.52, y=max_e * 1.08,
+                    text="<b>OPTIMAL VIRAL HIT</b><br><span style='font-size:10px; color:#14532D;'>High Reach · High Engagement</span>",
+                    showarrow=False, font=dict(family="Inter, system-ui, sans-serif", size=10.5, color="#15803D")
+                )
+                fig_quad.add_annotation(
+                    x=med_views * 0.48, y=med_eng * 0.16,
+                    text="<b>LOW SIGNAL</b><br><span style='font-size:10px; color:#881337;'>Sub-Median Across Both</span>",
+                    showarrow=False, font=dict(family="Inter, system-ui, sans-serif", size=10.5, color="#BE123C")
+                )
+                fig_quad.add_annotation(
+                    x=med_views + (max_v - med_views) * 0.52, y=med_eng * 0.16,
+                    text="<b>BROAD AWARENESS</b><br><span style='font-size:10px; color:#1E3A8A;'>High Views · Lower Interaction</span>",
+                    showarrow=False, font=dict(family="Inter, system-ui, sans-serif", size=10.5, color="#1D4ED8")
+                )
+
+                # Add other platform ghost points
+                for other_p in eval_platforms:
+                    if other_p != p_code and other_p in results_by_platform:
+                        o_lin = results_by_platform[other_p]["lin"]
+                        o_v = max(0.0, float(o_lin.get("views", 0.0)))
+                        o_e = max(0.0, float(o_lin.get("engagement", 0.0)))
+                        fig_quad.add_trace(
+                            go.Scatter(
+                                x=[o_v],
+                                y=[o_e],
+                                mode="markers+text",
+                                marker=dict(size=14, color="#CBD5E1", line=dict(color="#FFFFFF", width=2)),
+                                text=[f"<b>{other_p}</b>"],
+                                textposition="top center",
+                                textfont=dict(size=9.5, color="#64748B", family="Inter, system-ui, sans-serif"),
+                                hoverinfo="text",
+                                hovertext=f"<b>{PLATFORM_NAMES.get(other_p, other_p)}</b><br>Views: {o_v:,.0f}<br>Eng: {o_e:,.0f}",
+                                name=f"Other: {other_p}",
+                                showlegend=False,
+                            )
                         )
 
-                        col_m1, col_m2 = st.columns(2)
-                        with col_m1:
-                            m1_html = (
-                                f'<div style="background:#FFFFFF; padding:0.85rem; border-radius:8px; border:1px solid rgba(0,0,0,0.08);">'
-                                f'<div style="font-size:0.75rem; color:#555555;">Projected Views</div>'
-                                f'<div style="font-size:1.35rem; font-weight:700; color:#0D0D0D; margin:0.15rem 0;">{p_views:,.0f}</div>'
-                                f'<div style="font-size:0.75rem; color:#009E60;">P(High Views) = {p_vp*100:.0f}%</div>'
-                                f'</div>'
-                            )
-                            st.markdown(m1_html, unsafe_allow_html=True)
-                        with col_m2:
-                            m2_html = (
-                                f'<div style="background:#FFFFFF; padding:0.85rem; border-radius:8px; border:1px solid rgba(0,0,0,0.08);">'
-                                f'<div style="font-size:0.75rem; color:#555555;">Projected Engagements</div>'
-                                f'<div style="font-size:1.35rem; font-weight:700; color:#0D0D0D; margin:0.15rem 0;">{p_eng:,.0f}</div>'
-                                f'<div style="font-size:0.75rem; color:#555555;">P(High Eng) = {p_ep*100:.0f}%</div>'
-                                f'</div>'
-                            )
-                            st.markdown(m2_html, unsafe_allow_html=True)
+                # Active Focus Platform Point with modern aesthetic
+                act_marker_color = "#10B981" if (v_is_high and e_is_high) else ("#3B82F6" if v_is_high else ("#F59E0B" if e_is_high else "#F43F5E"))
+                
+                # Halo ring effect around active marker
+                fig_quad.add_trace(
+                    go.Scatter(
+                        x=[pred_views],
+                        y=[pred_eng],
+                        mode="markers",
+                        marker=dict(
+                            size=34,
+                            color=act_marker_color,
+                            opacity=0.22,
+                        ),
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
 
-                        # Fit Explanation / Why Good or Bad Fit
-                        if p_fit_exp:
-                            st.markdown(
-                                f'<div style="margin-top:0.85rem; background:#F4F4F6; border-left:3px solid #0D0D0D; border-radius:4px; padding:0.75rem 0.9rem;">'
-                                f'<div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#0D0D0D; margin-bottom:0.25rem;">💡 Why This Idea Fits / Misses ({p_name})</div>'
-                                f'<div style="font-size:0.82rem; color:#333333; line-height:1.5;">{html.escape(p_fit_exp)}</div>'
-                                f'</div>',
-                                unsafe_allow_html=True,
-                            )
+                # Solid Active Marker
+                fig_quad.add_trace(
+                    go.Scatter(
+                        x=[pred_views],
+                        y=[pred_eng],
+                        mode="markers+text",
+                        marker=dict(
+                            size=20,
+                            color=act_marker_color,
+                            symbol="circle",
+                            line=dict(color="#FFFFFF", width=2.5),
+                        ),
+                        text=[f"<b>{p_name}</b>"],
+                        textposition="bottom center",
+                        textfont=dict(size=11, color="#0F172A", family="Inter, system-ui, sans-serif"),
+                        hoverinfo="text",
+                        hovertext=(
+                            f"<b>★ {p_name} Exact Placement</b><br>"
+                            f"Views: <b>{pred_views:,.0f}</b> (Median: {med_views:,.0f})<br>"
+                            f"Engagement: <b>{pred_eng:,.0f}</b> (Median: {med_eng:,.0f})<br>"
+                            f"Classification: <b>{views_bin} / {eng_bin}</b>"
+                        ),
+                        name=f"Active ({p_name})",
+                        showlegend=False,
+                    )
+                )
 
-                    # Peer Benchmarks
-                    similar_posts = p_data.get("similar") or result.get("similar") or []
-                    if similar_posts:
-                        with st.container(border=True):
-                            st.markdown(f'<div class="card-title">🔍 Historical Peer Benchmarks ({p_name})</div>', unsafe_allow_html=True)
-                            for peer in similar_posts[:3]:
-                                peer_title_safe = html.escape(peer.get('title', 'Untitled')[:65])
-                                peer_plat_safe = peer.get('platform', p_code)
-                                peer_page_safe = html.escape(peer.get('page', ''))
-                                peer_views = peer.get('views', 0)
-                                peer_eng = peer.get('engagement', 0)
-                                peer_logo = PLATFORM_LOGOS.get(peer_plat_safe, "")
+                fig_quad.update_layout(
+                    height=390,
+                    margin=dict(l=50, r=30, t=20, b=45),
+                    paper_bgcolor="#FFFFFF",
+                    plot_bgcolor="#FAFAFC",
+                    hovermode=False,
+                    xaxis=dict(
+                        title="<b>Predicted Views</b>",
+                        title_font=dict(size=11, color="#64748B", family="Inter, system-ui, sans-serif"),
+                        range=[0, max_v * 1.15],
+                        showgrid=False,
+                        zeroline=False,
+                        fixedrange=True,
+                        tickformat=",.0f",
+                        tickfont=dict(size=10, color="#64748B"),
+                    ),
+                    yaxis=dict(
+                        title="<b>Predicted Engagements</b>",
+                        title_font=dict(size=11, color="#64748B", family="Inter, system-ui, sans-serif"),
+                        range=[0, max_e * 1.15],
+                        showgrid=False,
+                        zeroline=False,
+                        fixedrange=True,
+                        tickformat=",.0f",
+                        tickfont=dict(size=10, color="#64748B"),
+                    ),
+                )
 
-                                peer_html = (
-                                    f'<div style="background:#FFFFFF; border:1px solid rgba(0,0,0,0.08); border-radius:8px; padding:0.7rem 0.85rem; margin-bottom:0.5rem;">'
-                                    f'<div style="font-size:0.82rem; font-weight:500; color:#0D0D0D; margin-bottom:0.2rem;">"{peer_title_safe}"</div>'
-                                    f'<div style="font-size:0.75rem; color:#555555; display:flex; align-items:center; gap:0.8rem;">'
-                                    f'<span style="display:inline-flex; align-items:center; gap:0.25rem;">{peer_logo} <b>{peer_plat_safe}</b> · {peer_page_safe}</span>'
-                                    f'<span>👁️ {peer_views:,.0f} views</span>'
-                                    f'<span>❤️ {peer_eng:,.0f} eng</span>'
-                                    f'</div>'
-                                    f'</div>'
-                                )
-                                st.markdown(peer_html, unsafe_allow_html=True)
+                st.plotly_chart(
+                    fig_quad,
+                    use_container_width=True,
+                    config={
+                        "displayModeBar": False,
+                        "staticPlot": True,
+                    },
+                )
 
-                with col_res2:
-                    with st.container(border=True):
-                        st.markdown('<div class="card-title">🏆 Platform Ranking & Fit</div>', unsafe_allow_html=True)
+                # Elegant Metric Badges Below Graph
+                v_ratio = (pred_views / med_views * 100.0) if med_views > 0 else 100.0
+                e_ratio = (pred_eng / med_eng * 100.0) if med_eng > 0 else 100.0
+                
+                badge_v_color = "#10B981" if v_ratio >= 100 else "#64748B"
+                badge_e_color = "#10B981" if e_ratio >= 100 else "#64748B"
 
-                        for row in leaderboard:
-                            row_p_code = row["platform"]
-                            row_p_name = PLATFORM_LABELS.get(row_p_code, row_p_code)
-                            row_is_best = (row_p_code == best_platform)
-                            row_is_current = (row_p_code == p_code)
-                            row_logo = PLATFORM_LOGOS.get(row_p_code, "")
-                            
-                            if row_is_current:
-                                bg_style = "background:#FFFFFF; border:1.5px solid #0D0D0D; box-shadow:0 2px 8px rgba(0,0,0,0.05);"
-                            elif row_is_best:
-                                bg_style = "background:#FFFFFF; border:1px solid #009E60;"
-                            else:
-                                bg_style = "background:#FFFFFF; border:1px solid rgba(0,0,0,0.08);"
+                st.markdown(
+                    f"""
+                    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:0.6rem; margin-top:0.4rem;">
+                        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:0.6rem 0.8rem; text-align:center;">
+                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Views vs Median</div>
+                            <div style="font-size:1.05rem; font-weight:700; color:{badge_v_color}; margin-top:0.1rem;">{v_ratio:.0f}%</div>
+                        </div>
+                        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:0.6rem 0.8rem; text-align:center;">
+                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Engagement vs Median</div>
+                            <div style="font-size:1.05rem; font-weight:700; color:{badge_e_color}; margin-top:0.1rem;">{e_ratio:.0f}%</div>
+                        </div>
+                        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:0.6rem 0.8rem; text-align:center;">
+                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Predicted Bin</div>
+                            <div style="font-size:1.05rem; font-weight:700; color:#0F172A; margin-top:0.1rem;">{views_bin.upper()} · {eng_bin.upper()}</div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-                            row_score_color = "#009E60" if row["go_score"] >= 65 else ("#555555" if row["go_score"] >= 45 else "#D32F2F")
-                            row_badge_label = " ★ BEST FIT" if row_is_best else (" · ACTIVE TAB" if row_is_current else "")
+            # ---------------------------------------------------------------
+            # PART B: REGRESSIONS (ACTUAL NUMBERS)
+            # ---------------------------------------------------------------
+            with st.container(border=True):
+                st.markdown('<div style="font-size:0.95rem; font-weight:700; color:#0D0D0D; margin-bottom:0.35rem;">Part B: Regression Predictions (Actual Numbers)</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:0.82rem; color:#555555; margin-bottom:0.75rem;">Continuous actual performance estimates predicted via predict_lin (Support Vector Regressor).</div>', unsafe_allow_html=True)
 
-                            row_html = (
-                                f'<div style="{bg_style} border-radius:8px; padding:0.75rem 0.9rem; display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">'
-                                f'<div style="display:flex; align-items:center; gap:0.6rem;">'
-                                f'{row_logo}'
-                                f'<div>'
-                                f'<div style="font-size:0.85rem; font-weight:600; color:#0D0D0D;">{row_p_name}<span style="font-size:0.72rem; color:#007043; font-weight:600;">{row_badge_label}</span></div>'
-                                f'<div style="font-size:0.72rem; color:#555555;">Reach P: {row.get("views_p", 0)*100:.0f}% · Eng P: {row.get("eng_p", 0)*100:.0f}%</div>'
-                                f'</div>'
-                                f'</div>'
-                                f'<div style="font-size:1.25rem; font-weight:700; color:{row_score_color};">'
-                                f'{row["go_score"]:.1f}'
-                                f'</div>'
-                                f'</div>'
-                            )
-                            st.markdown(row_html, unsafe_allow_html=True)
+                col_reg1, col_reg2 = st.columns(2, gap="medium")
+                with col_reg1:
+                    m_views_html = f"""
+                    <div class="metric-box">
+                        <div class="metric-label">Projected Views</div>
+                        <div class="metric-value">{pred_views:,.0f}</div>
+                        <div style="font-size:0.78rem; color:#555555; margin-top:0.25rem;">Continuous linear regression prediction</div>
+                    </div>
+                    """
+                    st.markdown(m_views_html, unsafe_allow_html=True)
 
+                with col_reg2:
+                    m_eng_html = f"""
+                    <div class="metric-box">
+                        <div class="metric-label">Projected Engagements</div>
+                        <div class="metric-value">{pred_eng:,.0f}</div>
+                        <div style="font-size:0.78rem; color:#555555; margin-top:0.25rem;">Likes, comments, shares & saves</div>
+                    </div>
+                    """
+                    st.markdown(m_eng_html, unsafe_allow_html=True)
 
+            # ---------------------------------------------------------------
+            # PART C: BUDGET & ROI CALCULATOR
+            # ---------------------------------------------------------------
+            with st.container(border=True):
+                st.markdown('<div style="font-size:0.95rem; font-weight:700; color:#0D0D0D; margin-bottom:0.35rem;">Part C: Production Budget & Value / ROI Calculator</div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="font-size:0.82rem; color:#555555; margin-bottom:1rem;">'
+                    f'Standard benchmarks for <b>{p_name}</b>: Views CPM = <b>${VIEWS_CPM.get(p_code, 10.0):.2f}</b> / 1k views · Value per Engagement = <b>${ENGAGEMENT_VALUE.get(p_code, 2.0):.2f}</b>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
+                col_c_in, col_c_calc = st.columns([1, 1.8], gap="medium")
 
-        # Database History Drawer
-        with st.expander("📜 Recent Prediction History (SQLite)", expanded=False):
-            history_rows = get_history(limit=8)
-            if not history_rows:
-                st.info("No saved records in SQLite yet.")
-            else:
-                for h in history_rows:
-                    col_h1, col_h2, col_h3, col_h4 = st.columns([1, 4, 2, 1.2])
-                    with col_h1:
-                        st.markdown(f"**#{h['id']}**")
-                    with col_h2:
-                        st.markdown(f"**{html.escape(h.get('title') or h.get('description', '')[:45])}**")
-                        st.caption(f"{h.get('platform')} · {h.get('page')} · {h.get('duration_seconds', 20):.0f}s")
-                    with col_h3:
-                        st.markdown(f"Score: **{h.get('go_score', 0):.1f}**")
-                        st.caption(f"Views: {h.get('views_pred', 0):,.0f}")
-                    with col_h4:
-                        st.button(
-                            "Load",
-                            key=f"btn_load_h_{h['id']}",
-                            on_click=load_history_record,
-                            args=(h["id"],),
-                        )
+                with col_c_in:
+                    budget_input = st.number_input(
+                        "Production Budget ($NZD)",
+                        min_value=0.0,
+                        value=500.0,
+                        step=50.0,
+                        key=f"budget_input_{p_code}",
+                        help="Enter your estimated content creation / production spend.",
+                    )
 
-        # Bottom Actions
-        col_end1, col_end2 = st.columns(2, gap="medium")
-        with col_end1:
-            st.markdown(
-                '<a href="#section-1" target="_self" class="nav-action-secondary">← New Concept (Page 1)</a>',
-                unsafe_allow_html=True,
+                # Economic Calculation
+                cpm = VIEWS_CPM.get(p_code, 10.0)
+                eng_val_rate = ENGAGEMENT_VALUE.get(p_code, 2.0)
+
+                views_value = (pred_views / 1000.0) * cpm
+                engagement_value = pred_eng * eng_val_rate
+                gross_media_value = views_value + engagement_value
+                net_value = gross_media_value - budget_input
+                roi_pct = ((gross_media_value - budget_input) / budget_input * 100.0) if budget_input > 0 else 0.0
+
+                roi_color = "#009E60" if roi_pct >= 0 else "#D32F2F"
+                roi_sign = "+" if roi_pct >= 0 else ""
+
+                with col_c_calc:
+                    calc_summary_html = f"""
+                    <div style="background:#FFFFFF; border:1px solid rgba(0,0,0,0.08); border-radius:8px; padding:1rem 1.25rem;">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem; font-size:0.85rem;">
+                            <span style="color:#555555;">Views Value ({cpm:.2f} CPM):</span>
+                            <b style="color:#0D0D0D;">${views_value:,.2f}</b>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem; font-size:0.85rem;">
+                            <span style="color:#555555;">Engagement Value (${eng_val_rate:.2f}/eng):</span>
+                            <b style="color:#0D0D0D;">${engagement_value:,.2f}</b>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; border-top:1px solid rgba(0,0,0,0.08); padding-top:0.45rem; margin-top:0.45rem; font-size:0.92rem;">
+                            <span style="color:#0D0D0D; font-weight:600;">Total Estimated Media Value:</span>
+                            <b style="color:#0D0D0D;">${gross_media_value:,.2f}</b>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-top:0.35rem; font-size:0.92rem;">
+                            <span style="color:#555555;">Net Value (Value - Budget):</span>
+                            <b style="color:{roi_color};">${net_value:,.2f}</b>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-top:0.35rem; font-size:1.05rem; font-weight:700;">
+                            <span style="color:#0D0D0D;">Estimated ROI:</span>
+                            <span style="color:{roi_color};">{roi_sign}{roi_pct:.1f}%</span>
+                        </div>
+                    </div>
+                    """
+                    st.markdown(calc_summary_html, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# PERSISTENT HISTORY & EXPORT DRAWER
+# ---------------------------------------------------------------------------
+history_data = load_prediction_history()
+with st.expander(f"📜 Prediction History & Export Log ({len(history_data)} Saved Runs)", expanded=False):
+    if not history_data:
+        st.info("No saved prediction runs yet. Click '🚀 Run Model Inference' to create your first record.")
+    else:
+        st.markdown("<div style='font-size:0.85rem; color:#555555; margin-bottom:0.75rem;'>All runs are persisted automatically in <code>prediction_history.json</code> without external database dependencies.</div>", unsafe_allow_html=True)
+
+        col_exp1, col_exp2 = st.columns(2)
+        with col_exp1:
+            st.download_button(
+                "📥 Download History as JSON",
+                data=json.dumps(history_data, indent=2),
+                file_name="sm_optimizer_history.json",
+                mime="application/json",
+                use_container_width=True,
             )
-        with col_end2:
-            st.markdown(
-                '<a href="#section-2" target="_self" class="nav-action-secondary">← Edit Parameters (Page 2)</a>',
-                unsafe_allow_html=True,
-            )
+        with col_exp2:
+            # Flatten to CSV format
+            flat_rows = []
+            for r in history_data:
+                for p, ev in r.get("evaluations", {}).items():
+                    flat_rows.append({
+                        "timestamp": r.get("timestamp"),
+                        "caption": r.get("caption"),
+                        "video_description": r.get("video_description"),
+                        "account_page": r.get("account_page"),
+                        "duration_seconds": r.get("duration_seconds"),
+                        "platform": p,
+                        "projected_views": ev.get("projected_views"),
+                        "projected_engagement": ev.get("projected_engagement"),
+                        "quadrant_views": ev.get("quadrant_views"),
+                        "quadrant_engagement": ev.get("quadrant_engagement"),
+                    })
+            if flat_rows:
+                df_export = pd.DataFrame(flat_rows)
+                st.download_button(
+                    "📥 Download History as CSV",
+                    data=df_export.to_csv(index=False),
+                    file_name="sm_optimizer_history.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+        st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
+        # Display recent 5 runs in an interactive dataframe
+        if flat_rows:
+            st.dataframe(pd.DataFrame(flat_rows).tail(10), use_container_width=True, hide_index=True)
