@@ -558,6 +558,40 @@ div.stButton > button:active {
     transform: translateY(0px) !important;
 }
 
+/* Pulse & Shimmer Animations */
+@keyframes pulse-dim {
+    0% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.55; transform: scale(0.995); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes shimmer-glow {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+.pulsing-ticker {
+    animation: pulse-dim 1.4s ease-in-out infinite;
+    background: linear-gradient(90deg, #F8FAFC 0%, #EFF6FF 50%, #F8FAFC 100%);
+    background-size: 200% 100%;
+    border: 1px solid #BFDBFE;
+    border-radius: 10px;
+    padding: 0.9rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);
+}
+
+.spinner-dot {
+    width: 12px;
+    height: 12px;
+    background-color: #2563EB;
+    border-radius: 50%;
+    animation: pulse-dim 0.8s ease-in-out infinite alternate;
+    box-shadow: 0 0 10px rgba(37, 99, 235, 0.6);
+}
+
 /* Status Widget Modern Look */
 [data-testid="stStatusWidget"] {
     background: #FFFFFF !important;
@@ -993,94 +1027,44 @@ if "last_results" not in st.session_state:
 
 # If user clicked the button or results exist in session state
 if run_btn:
-    with st.status("🚀 Running Social Media Optimizer Intelligence Engine...", expanded=True) as status:
-        prog_bar = st.progress(0)
-        step_box = st.empty()
+    with st.status("🎬 Processing Video Concept Through AI Engine...", expanded=True) as status:
+        prog_bar = st.progress(5)
+        info_ticker = st.empty()
         
-        # Step definitions
-        total_platforms = len(eval_platforms)
-        total_steps = 2 + total_platforms  # Step 1 (NLP), Step 2..N+1 (Platforms), Final Step (ROI Synthesis)
-
-        def render_steps(active_step_idx: int, completed_steps: list[str], current_detail: str = ""):
-            """Render a clean animated step-by-step progress card."""
-            steps_data = [
-                ("1", "Extract NLP Tokens & Cluster Embeddings", "Parsing play-by-play narrative and semantic vocabularies"),
-            ]
-            for p_code in eval_platforms:
-                p_name_cur = PLATFORM_NAMES.get(p_code, p_code)
-                steps_data.append((
-                    str(len(steps_data) + 1),
-                    f"Evaluate {p_name_cur} ({p_code})",
-                    "Running SVR linear regressor & Polynomial SVC classifier"
-                ))
-            steps_data.append((
-                str(len(steps_data) + 1),
-                "Synthesize Performance Matrix & Value / ROI",
-                "Calculating CPM media value, net return, and empirical quadrant mapping"
-            ))
-
-            html_card = """
-            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:1rem 1.25rem; margin-top:0.4rem; font-family:'Inter', sans-serif;">
-            """
-            for s_num, s_title, s_desc in steps_data:
-                s_int = int(s_num)
-                if s_int < active_step_idx:
-                    # Completed Step
-                    html_card += f"""
-                    <div style="display:flex; align-items:flex-start; gap:0.75rem; margin-bottom:0.6rem; opacity:0.85;">
-                        <div style="background:#10B981; color:#FFFFFF; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:700; flex-shrink:0;">✓</div>
-                        <div>
-                            <div style="font-size:0.85rem; font-weight:600; color:#0F172A; text-decoration:none;">Step {s_num}/{total_steps}: {s_title}</div>
-                            <div style="font-size:0.75rem; color:#64748B;">{s_desc}</div>
-                        </div>
+        def show_ticker(icon: str, title: str, subtitle: str):
+            info_ticker.markdown(
+                f"""
+                <div class="pulsing-ticker">
+                    <div class="spinner-dot"></div>
+                    <div>
+                        <div style="font-size:0.92rem; font-weight:700; color:#1E40AF;">{icon} {title}</div>
+                        <div style="font-size:0.8rem; color:#475569; margin-top:0.15rem;">{subtitle}</div>
                     </div>
-                    """
-                elif s_int == active_step_idx:
-                    # Active Step (Highlighted with glowing pulse)
-                    detail_text = f"<div style='font-size:0.75rem; color:#2563EB; margin-top:0.15rem; font-weight:500;'>⏳ {current_detail}</div>" if current_detail else f"<div style='font-size:0.75rem; color:#64748B;'>{s_desc}</div>"
-                    html_card += f"""
-                    <div style="display:flex; align-items:flex-start; gap:0.75rem; margin-bottom:0.6rem; background:#EFF6FF; border:1px solid #BFDBFE; border-radius:8px; padding:0.5rem 0.65rem;">
-                        <div style="background:#2563EB; color:#FFFFFF; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:700; flex-shrink:0; animation: pulse 1.5s infinite;">{s_num}</div>
-                        <div>
-                            <div style="font-size:0.85rem; font-weight:700; color:#1E40AF;">Step {s_num}/{total_steps}: {s_title}</div>
-                            {detail_text}
-                        </div>
-                    </div>
-                    """
-                else:
-                    # Pending Step
-                    html_card += f"""
-                    <div style="display:flex; align-items:flex-start; gap:0.75rem; margin-bottom:0.6rem; opacity:0.45;">
-                        <div style="background:#E2E8F0; color:#64748B; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:700; flex-shrink:0;">{s_num}</div>
-                        <div>
-                            <div style="font-size:0.85rem; font-weight:600; color:#334155;">Step {s_num}/{total_steps}: {s_title}</div>
-                            <div style="font-size:0.75rem; color:#94A3B8;">{s_desc}</div>
-                        </div>
-                    </div>
-                    """
-            html_card += "</div>"
-            step_box.markdown(html_card, unsafe_allow_html=True)
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-        # -------------------------------------------------------------------
-        # Step 1: Feature Extraction
-        # -------------------------------------------------------------------
-        current_step_num = 1
-        prog_bar.progress(10)
-        render_steps(current_step_num, [], "Extracting multi-hot tokens, entity tags, and clustering...")
-        time.sleep(0.3)
+        # 1. Feature Extraction & Embedding
+        show_ticker("🔍", "Step 1/3: Parsing Play-by-Play & NLP Semantic Tokens", "Extracting multi-hot action keywords, player entities, and KMeans cluster embeddings...")
+        prog_bar.progress(18)
+        time.sleep(0.4)
 
         results_by_platform: Dict[str, Dict[str, Any]] = {}
+        total_p = len(eval_platforms)
 
-        # -------------------------------------------------------------------
-        # Steps 2..N+1: Platform Evaluation
-        # -------------------------------------------------------------------
+        # 2. Multi-Platform SVR & SVC Evaluation
         for idx, p_code in enumerate(eval_platforms):
-            current_step_num = 2 + idx
-            step_pct = int(10 + ((idx + 1) / total_steps) * 80)
-            prog_bar.progress(step_pct)
             p_name_cur = PLATFORM_NAMES.get(p_code, p_code)
-            render_steps(current_step_num, [], f"Computing Support Vector predictions for {p_name_cur}...")
-
+            pct = 20 + int((idx + 1) / total_p * 60)
+            prog_bar.progress(pct)
+            
+            show_ticker(
+                "⚡",
+                f"Step 2/3: Evaluating {p_name_cur} ({p_code}) Models",
+                f"Running Support Vector Regressor (SVR) & Polynomial SVC Classifier for {p_name_cur}..."
+            )
+            
             df_single = build_model_dataframe(
                 caption=post_caption,
                 play_by_play=video_description,
@@ -1108,15 +1092,27 @@ if run_btn:
             except Exception as e:
                 st.error(f"Inference error for {p_code}: {e}")
                 raise e
-            time.sleep(0.25)
+            time.sleep(0.35)
 
-        # -------------------------------------------------------------------
-        # Final Step: Valuation & Quadrant Synthesis
-        # -------------------------------------------------------------------
-        current_step_num = total_steps
+        # 3. Final Synthesis
         prog_bar.progress(95)
-        render_steps(current_step_num, [], "Synthesizing cross-platform matrix and budget metrics...")
-        time.sleep(0.25)
+        show_ticker("📊", "Step 3/3: Synthesizing Cross-Platform Value & ROI", "Calculating CPM valuation, net media margins, and empirical matrix placements...")
+        time.sleep(0.35)
+        
+        prog_bar.progress(100)
+        info_ticker.markdown(
+            """
+            <div style="background:#F0FDF4; border:1px solid #86EFAC; border-radius:10px; padding:0.9rem 1.25rem; display:flex; align-items:center; gap:0.75rem;">
+                <div style="font-size:1.15rem;">✨</div>
+                <div>
+                    <div style="font-size:0.92rem; font-weight:700; color:#15803D;">Assessment Complete!</div>
+                    <div style="font-size:0.8rem; color:#166534;">Strategic matrix, performance predictions, and budget calculator generated below.</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        status.update(label="✅ Assessment Complete!", state="complete", expanded=False)
 
         # Save to session and disk
         st.session_state.last_results = {

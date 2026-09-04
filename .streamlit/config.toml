@@ -9,6 +9,7 @@ font = "sans serif"
 [server]
 headless = true
 runOnSave = true
+fileWatcherType = "auto"
 
 [browser]
 gatherUsageStats = false
