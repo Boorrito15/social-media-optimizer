@@ -1,50 +1,16 @@
-# =============================================================================
-# Social Media Optimizer — consolidated requirements
-#
-# Single requirements file for every subsystem in the repo:
-#   - ingestion (data/raw -> data/processed)
-#   - video scraping -> 480p transcode -> GCS upload
-#   - models/ package (train + predict)
-#   - prediction API + Streamlit UI (src/api, src/db, src/ml, streamlit_app.py)
-#
-# Consolidated from the previous requirements.txt / requirements-api.txt /
-# requirements-scraper.txt. Packages that were only used by removed subsystems
-# (torch, google-genai, openai-whisper, opencv-python-headless, polars) were
-# dropped; nothing here is imported by code that no longer exists.
-# =============================================================================
-
-# ---- Data & Ingestion (src/ingestion/) ----
-pandas
-numpy
-pyarrow
-
-# ---- Video scraping / transcoding / GCS (src/video/) ----
-#  NOTE: ffmpeg (and ffprobe) must also be installed on the host (brew/apt)
-#  for the 480p transcode step; they are used via utils/ffmpeg.py. yt-dlp
-#  pulls in its own transitive deps (certifi, urllib3, requests).
-yt-dlp
-google-cloud-storage
-python-dotenv
-
-# ---- Models package (models/) ----
-scikit-learn
-joblib
-regex                     # Unicode-aware patterns for hashtag/mention/emoji multi-hot
-sentence-transformers     # used by models.shared.clustering (predict-time embeddings)
-
-# ---- ML serving stack (src/ml/ + src/api/) ----
-scipy                     # cdist used across src/ml feature/predict modules
-xgboost
-keras
-tensorflow                # keras backend (keras.json: backend = tensorflow)
-
-# ---- Prediction API (src/api/, launched via run.sh) ----
-fastapi
-uvicorn
-
-# ---- Streamlit UI (streamlit_app.py) ----
+# Streamlit & Visualization
 streamlit
 plotly
 
-# ---- Dev & Tests ----
-pytest
+# Data & Matrix Operations
+pandas
+numpy
+pyarrow<25
+
+# Models Pipeline & NLP
+scikit-learn
+joblib
+regex
+sentence-transformers
+torch
+python-dotenv
