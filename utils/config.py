@@ -158,14 +158,6 @@ def service_account_credentials() -> Path | None:
     return p if p.is_absolute() else PROJECT_ROOT / p
 
 
-def gemini_api_key() -> str | None:
-    return get_optional("GEMINI_API_KEY")
-
-
-def gemini_model() -> str:
-    return get("GEMINI_MODEL", "models/gemini-2.0-flash")
-
-
 def video_output_dir() -> str:
     return get("VIDEO_OUTPUT_DIR", "data/videos")
 

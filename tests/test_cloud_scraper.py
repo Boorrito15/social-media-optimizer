@@ -3,7 +3,7 @@
 Covers:
 1. Cloud Run task sharding logic (CLOUD_RUN_TASK_INDEX, CLOUD_RUN_TASK_COUNT, deterministic modulo partitioning).
 2. Application Default Credentials (ADC) fallback in main.py and GCS client when local key file is absent.
-3. Minimal scraper dependencies validation (requirements-scraper.txt isolation from heavy ML libraries).
+3. Consolidated dependencies validation (single requirements.txt covers scraper + models + API/UI).
 4. Budget and cost calculation verification (10 tasks x 3600s x 1 vCPU / 2 GiB in asia-southeast2 <= $1.46 USD < $2.00 USD).
 5. Index shard Parquet schema compliance (15 columns, snappy compression).
 6. Idempotency skipping logic (simulating existing blobs in GCS and ensuring status="skipped" without downloading).
@@ -295,68 +295,47 @@ class TestApplicationDefaultCredentialsFallback:
 
 
 # ==============================================================================
-# 3. Minimal Scraper Dependencies Validation
+# 3. Consolidated Dependencies Validation
 # ==============================================================================
 
-class TestMinimalScraperDependencies:
-    """Validates requirements-scraper.txt isolation from heavy ML / UI packages."""
+class TestConsolidatedRequirements:
+    """Validates the single consolidated requirements.txt (ingestion + scraping + models)."""
 
     @pytest.fixture
-    def scraper_req_path(self) -> Path:
-        return PROJECT_ROOT / "requirements-scraper.txt"
+    def requirements_path(self) -> Path:
+        return PROJECT_ROOT / "requirements.txt"
 
     @pytest.fixture
-    def scraper_packages(self, scraper_req_path) -> list[str]:
-        assert scraper_req_path.is_file(), f"Missing requirements-scraper.txt at {scraper_req_path}"
-        lines = scraper_req_path.read_text(encoding="utf-8").splitlines()
+    def packages(self, requirements_path) -> list[str]:
+        assert requirements_path.is_file(), f"Missing requirements.txt at {requirements_path}"
+        lines = requirements_path.read_text(encoding="utf-8").splitlines()
         packages = []
         for line in lines:
             line = line.strip()
             if line and not line.startswith("#"):
+                line = line.split("#", 1)[0].strip()  # strip inline comments
+                if not line:
+                    continue
                 pkg_name = line.split("==")[0].split(">=")[0].split("<=")[0].split("~=")[0].strip().lower()
                 packages.append(pkg_name)
         return packages
 
-    def test_requirements_scraper_file_exists(self, scraper_req_path):
-        """requirements-scraper.txt must exist at project root."""
-        assert scraper_req_path.exists()
-        assert scraper_req_path.stat().st_size > 0
+    def test_requirements_file_exists(self, requirements_path):
+        """requirements.txt must exist at project root."""
+        assert requirements_path.exists()
+        assert requirements_path.stat().st_size > 0
 
-    def test_essential_scraper_packages_present(self, scraper_packages):
+    def test_essential_scraper_packages_present(self, packages):
         """Core scraping, DataFrame, Parquet and GCS packages must be present."""
         essential = ["yt-dlp", "pandas", "pyarrow", "google-cloud-storage", "python-dotenv"]
         for pkg in essential:
-            assert pkg in scraper_packages, f"Essential package '{pkg}' missing from requirements-scraper.txt"
+            assert pkg in packages, f"Essential package '{pkg}' missing from requirements.txt"
 
-    def test_heavy_ml_packages_strictly_excluded(self, scraper_packages):
-        """Heavy ML, NLP, and UI packages must NOT be present in scraper container dependencies."""
-        forbidden_heavy_packages = [
-            "torch",
-            "pytorch",
-            "openai-whisper",
-            "whisper",
-            "google-genai",
-            "xgboost",
-            "scikit-learn",
-            "sklearn",
-            "streamlit",
-            "plotly",
-            "transformers",
-            "torchaudio",
-            "torchvision",
-        ]
-        for forbidden in forbidden_heavy_packages:
-            assert forbidden not in scraper_packages, (
-                f"Heavy package '{forbidden}' found in requirements-scraper.txt! "
-                f"Container image must remain lightweight (~220 MB)."
-            )
-
-    def test_minimal_package_count(self, scraper_packages):
-        """Total dependencies in requirements-scraper.txt should be <= 12 to maintain < 250 MB image."""
-        assert len(scraper_packages) <= 12, (
-            f"Too many dependencies in requirements-scraper.txt ({len(scraper_packages)}). "
-            f"Expected <= 12 minimal dependencies."
-        )
+    def test_models_packages_present(self, packages):
+        """Model pipeline packages must be present (single consolidated file)."""
+        essential = ["scikit-learn", "joblib", "regex", "sentence-transformers"]
+        for pkg in essential:
+            assert pkg in packages, f"Model package '{pkg}' missing from requirements.txt"
 
 
 # ==============================================================================

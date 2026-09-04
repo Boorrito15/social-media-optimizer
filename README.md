@@ -37,11 +37,10 @@ All outputs are uploaded to regional standard buckets in `asia-southeast2`:
 ## 📂 Code Layout
 
 - **[`Dockerfile.scraper`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/Dockerfile.scraper)**: Lightweight Dockerfile for Cloud Run Jobs scraper.
-- **[`requirements-scraper.txt`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/requirements-scraper.txt)**: Minimal scraper runtime dependencies.
+- **[`requirements.txt`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/requirements.txt)**: Consolidated runtime dependencies (ingestion, scraper, models, API/UI).
 - **[`src/video/main.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/main.py)**: Scraper entrypoint with ADC fallback and task sharding.
 - **[`src/video/upload.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/upload.py)**: Resolution, download, transcode, GCS upload, and disk cleanup.
 - **[`src/video/index.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/index.py)**: Index shard emission to GCS.
-- **[`src/video/web_dashboard.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/video/web_dashboard.py)**: MinionsScout live web dashboard server.
 - **[`src/ml/`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/ml)`**: ML feature pipeline (`features.py`), training (`train.py`), serving (`predict.py`), and metadata auto-inference (`infer.py`).
 - **[`src/api/app.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/src/api/app.py)**: FastAPI prediction service (see "Predictor UI & API" below).
 - **[`streamlit_app.py`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/streamlit_app.py)**: Streamlit dashboard — a professional social-media-manager "Studio" with six sections (see *Dashboard sections* below).
@@ -66,7 +65,7 @@ projection, and similar historical posts.
 
 ```bash
 source .venv/bin/activate
-pip install -r requirements.txt -r requirements-api.txt   # adds fastapi/uvicorn & co.
+pip install -r requirements.txt   # single consolidated file (ingestion, scraper, models, API/UI)
 
 # (optional) retrain models from data/processed/processed.csv
 ./run.sh train
@@ -220,7 +219,7 @@ For high-throughput, parallel scraping without keeping local machines running, t
 - **Application Default Credentials (ADC)**: Automatically authenticates via GCP metadata server inside Cloud Run or falls back to service account JSON keys.
 - **Index Shards & Destination**: Writes 15-column Snappy Parquet shards to `gs://sm-optimizer-processed/manifests/index_shard_<run_id>_<seq:06d>.parquet`.
 - **Co-located Storage**: Deployed to `asia-southeast2` (Jakarta) alongside the GCS bucket `gs://sm-optimizer-processed` for $0 network egress cost.
-- **Scraper Packaging**: Deployed as a lightweight Docker container built using [`Dockerfile.scraper`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/Dockerfile.scraper) and [`requirements-scraper.txt`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/requirements-scraper.txt) (based on `python:3.11-slim` + system `ffmpeg`, ~220 MB).
+- **Scraper Packaging**: Deployed as a lightweight Docker container built using [`Dockerfile.scraper`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/Dockerfile.scraper) and the consolidated [`requirements.txt`](file:///Users/LFH/code/leonhelfinger/project/social-media-optimizer/requirements.txt) (based on `python:3.11-slim` + system `ffmpeg`).
 
 ### Building & Deploying
 
@@ -241,45 +240,6 @@ gcloud run jobs create meta-video-scraper-job \
 
 # 3) Execute the job
 gcloud run jobs execute meta-video-scraper-job --region asia-southeast2
-```
-
----
-
-## 🍌 MinionsScout — Live Command Center & Monitoring Dashboard
-
-**MinionsScout** is a high-performance, real-time command center for monitoring ingestion progress, throughput, and estimated completion times across all platforms.
-
-### Features
-- **⚡️ Instant Load (< 15ms)**: Powered by an in-memory & disk cache (`data/.gcs_stats_cache.json`) for zero-delay page loads.
-- **🎯 Targeted GCS Prefix Scanning**: Optimized scan queries targeting only active prefixes (`videos/facebook/`, `videos/instagram/`), reducing API latency from ~7s to ~1s.
-- **🔄 On-Demand Sync Button**: Interactive `⚡️ Refresh Data` button with live spinner feedback and smooth 60 FPS numeric lerp animations.
-- **🌍 Dynamic Client Timezone Detection**: Automatically formats all ETAs, sync timestamps, and live clocks in the viewer's local timezone (`Intl.DateTimeFormat`).
-- **📈 Stabilized EMA Speed & ETA**: Exponential Moving Average ($\\alpha = 0.15$) filter over a rolling window to eliminate abrupt spikes from parallel thread completions.
-- **🎬 Hardware-Accelerated 480p Video Preview**: Live embedded preview of the latest processed video deliverables (`/api/video/latest`) with zero Cumulative Layout Shift (CLS).
-- **🌐 Global Live Sharing**: Instant public HTTPS tunnel integration via Cloudflare Tunnel.
-
-### Launching the Dashboard
-
-```bash
-# 1) Start the high-performance MinionsScout Web Server (Port 8505)
-python -m src.video.web_dashboard 8505
-
-# 2) Optional: Create an instant public live HTTPS link
-cloudflared tunnel --url http://localhost:8505
-
-# 3) Optional: Launch the Streamlit dashboard
-streamlit run src/video/dashboard.py
-```
-
----
-
-## 🤖 Automated Telegram & Lark Notifiers
-
-To run automated background status reports to Telegram or Lark channels with rolling ETA updates:
-
-```bash
-# Set TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID or LARK_WEBHOOK_URL in .env
-python -m src.video.monitor --interval 300
 ```
 
 ---

@@ -17,7 +17,9 @@ import functools
 import html
 import json
 import os
+import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -206,6 +208,206 @@ TEAM_OPTIONS = ["men", "women", "veterans", "maori", "youth"]
 AUDIO_OPTIONS = ["ambient", "voice", "song", "none", "other"]
 
 # ---------------------------------------------------------------------------
+# Auto-Inference Keyword Dictionaries (Deterministic Keyword Extraction)
+# ---------------------------------------------------------------------------
+THEMES_DICT = {
+    "try": ["try", "score", "touch down", "ground the ball", "grounds the ball", "in-goal", "crosses the chalk", "corner"],
+    "celebration": ["celebrat", "trophy", "win the final", "lift the cup", "title", "champ", "cheering", "hug", "jubilation"],
+    "rugby_skills": ["skill", "offload", "chip", "step", "dummy", "pass", "fend", "cross-kick", "handling", "flair"],
+    "training": ["training", "drill", "pre-season", "session", "practice", "gym", "treadmill", "weights", "conditioning"],
+    "challenges": ["challenge", "day in the life", "q&a", "crossbar", "quiz"],
+    "player story": ["debut", "return", "journey", "story", "comeback", "career", "veteran", "retire", "tribute", "farewell"],
+    "kick": ["kick", "conversion", "penalty", "drop goal", "penalty goal", "touchline kick"],
+    "tackle": ["tackle", "hit", "crunch", "smash", "dominant", "turnover", "defense", "defend"],
+    "haka": ["haka", "ka mate", "kapa o pango", "challenge"],
+    "rivalry": ["rival", "derby", "grudge", "vs", "clash", "showdown", "battle", "springboks", "wallabies", "ireland", "france", "england"],
+    "run": ["sprint", "break", "line break", "downfield", "burst", "dash", "speed", "charge", "gallop"],
+    "conversion": ["conversion", "add the two", "two points", "extras"],
+    "non rugby related": [
+        "bad", "terrible", "boring", "awful", "trash", "garbage", "poor", "dark",
+        "blurry", "static", "nothing happens", "random", "test", "nonsense", "not rugby",
+        "irrelevant", "unrelated", "fail", "slow", "quiet", "blank", "asleep", "cat", "cooking"
+    ],
+}
+
+FORMATS_DICT = {
+    "highlight": ["highlight", "try", "score", "moment", "best of", "clips", "play", "action", "breakout"],
+    "behind-the-scenes": ["behind the scenes", "bts", "training", "locker", "tour", "changing room", "bus", "tunnel"],
+    "interview": ["interview", "speaks", "talks to", "qa", "press conference", "microphone", "reflects"],
+    "announcement": ["announce", "reveal", "squad", "signing", "selection", "named", "unveil"],
+    "reaction": ["reaction", "reacts", "respond", "face", "shocked"],
+    "candid clip": ["candid", "blooper", "funny", "joke", "prank", "laugh", "messing around"],
+    "archive": ["archive", "throwback", "classic", "historic", "retro", "years ago", "vault"],
+    "promotion": ["watch", "don't miss", "kick-off", "live on", "tune in", "match day", "tickets"],
+    "ticket sales": ["buy tickets", "get tickets", "ticket sales", "seats available"],
+    "montage": ["montage", "compilation", "tribute", "season recap", "mix"],
+}
+
+TONES_DICT = {
+    "excitement": ["spectacular", "unbelievable", "incredible", "amazing", "electric", "thrilling", "insane", "sprints", "erupts", "roaring", "crunching"],
+    "pride": ["pride", "proud", "jersey", "all black", "black fern", "honour", "legacy", "tradition", "anthem"],
+    "tension": ["tension", "tense", "nail-biter", "final minute", "pressure", "clutch", "last-minute", "edge of seat"],
+    "nostalgia": ["nostalgia", "throwback", "memories", "legend", "historic", "reminiscing", "golden era"],
+    "humour": ["funny", "joke", "banter", "humour", "humor", "laugh", "blooper", "prank", "hilarious"],
+    "wholesome": ["wholesome", "heartwarming", "family", "kids", "fan", "signed", "smile", "kindness"],
+    "solemn": ["solemn", "memorial", "tribute", "respect", "sadness", "farewell", "retiring", "injury", "loss"],
+    "sadness": ["sad", "heartbreak", "defeat", "loss", "tears", "crying", "disappointment"],
+    "lighthearted": ["lighthearted", "casual", "relaxed", "fun", "chill", "coffee", "hotel", "travel"],
+    "provocative": ["provocative", "controversial", "referee", "card", "red card", "yellow card", "feud"],
+}
+
+CONTEXTS_DICT = {
+    "match day": ["match day", "stadium", "crowd", "final", "kick-off", "pitch", "whistle", "game", "test match"],
+    "pre-match": ["pre-match", "warm-up", "tunnel", "changing room", "anthem"],
+    "post-match": ["post-match", "press conference", "trophy", "celebration", "interview", "after the whistle"],
+    "gym": ["gym", "weights", "lifting", "bench", "squat"],
+    "changing room": ["changing room", "locker room", "sheds"],
+    "press conference": ["press conference", "media", "journalists"],
+    "tour": ["tour", "overseas", "hotel", "flight", "bus", "travel"],
+    "off-season": ["off-season", "break", "holiday"],
+    "squad naming": ["squad naming", "team naming", "announcement"],
+    "jersey reveal": ["jersey reveal", "kit", "new jersey"],
+    "award": ["award", "player of the year", "medal"],
+}
+
+AUDIO_FORMATS_DICT = {
+    "voice": ["interview", "speaks", "talking", "speech", "huddle", "commentary", "commentator", "voice"],
+    "song": ["song", "music", "beat", "anthem", "track"],
+    "ambient": ["stadium", "crowd", "roaring", "cheering", "applause", "ambient", "cheers", "sound"],
+    "none": ["quiet", "silent", "muted", "dark", "boring", "static", "nothing", "none"],
+    "other": ["sound effects", "sfx", "other"],
+}
+
+TEAM_CATEGORIES_DICT = {
+    "women": ["black fern", "women", "girls", "female", "farah palmer", "aupiki"],
+    "men": ["all black", "men", "male", "boys", "npc", "super rugby"],
+    "veterans": ["veteran", "legend", "retired", "classic ab", "former player"],
+    "maori": ["maori", "all blacks maori", "tangata"],
+    "youth": ["u20", "youth", "school", "junior", "u85"],
+}
+
+PEOPLE_MAP_DICT = {
+    "all blacks": ["all blacks", "all black", "ab", "kiwis", "men in black"],
+    "black ferns": ["black ferns", "black fern", "ferns"],
+    "nz sevens": ["sevens", "nz sevens", "all blacks sevens", "black ferns sevens"],
+    "all blacks xv": ["all blacks xv", "abxv", "nz xv"],
+    "beauden barrett": ["beauden", "beauden barrett", "b. barrett"],
+    "ardie savea": ["ardie", "savea", "ardie savea"],
+    "will jordan": ["will jordan", "jordan"],
+    "rieo ioane": ["rieo", "ioane", "rieo ioane", "reiko ioane"],
+    "codie taylor": ["codie", "taylor", "codie taylor"],
+    "scott barrett": ["scott barrett", "captain barrett"],
+    "sam cane": ["sam cane", "cane"],
+    "damian mckenzie": ["damian", "mckenzie", "dmac", "damian mckenzie"],
+    "caleb clarke": ["caleb", "clarke", "caleb clarke"],
+    "jordie barrett": ["jordie", "jordie barrett"],
+    "cam roigard": ["roigard", "cam roigard"],
+    "tyrel lomax": ["lomax", "tyrel lomax"],
+    "tamaiti williams": ["tamaiti", "tamaiti williams"],
+    "sevu reece": ["sevu", "reece", "sevu reece"],
+    "tupou vaa'i": ["vaa'i", "vaai", "tupou vaa'i"],
+    "asafo aumua": ["aumua", "asafo aumua"],
+    "wallabies": ["wallabies", "australia", "aussie"],
+    "springboks": ["springboks", "springbok", "south africa", "boks"],
+    "england rugby": ["england rugby", "england", "red roses"],
+    "ireland rugby": ["ireland rugby", "ireland", "irish"],
+    "france rugby": ["france rugby", "france", "french", "les bleus"],
+}
+
+BRAND_MAP_DICT = {
+    "adidas": ["adidas", "three stripes", "jersey", "boots", "kit"],
+    "ineos": ["ineos"],
+    "altrad": ["altrad"],
+    "tudor": ["tudor", "watch", "timepiece"],
+    "ford": ["ford", "truck", "ranger"],
+    "asahi": ["asahi", "beer"],
+    "smart rugby": ["smart rugby", "smart ball", "microchip"],
+    "sky sport": ["sky sport", "sky", "broadcast", "commentary"],
+    "nib": ["nib", "health", "insurance"],
+    "gatorade": ["gatorade", "hydration", "sports drink"],
+    "red bull": ["red bull", "energy drink"],
+    "aig": ["aig"],
+    "barfoot & thompson": ["barfoot", "thompson", "barfoot & thompson"],
+}
+
+PAGES_DICT = {
+    "all blacks": "All Blacks",
+    "black fern": "Black Ferns",
+    "fern": "Black Ferns",
+    "nz sevens": "NZ Sevens",
+    "sevens": "NZ Sevens",
+    "nzr": "NZR",
+    "abxv": "ABXV",
+    "all blacks xv": "ABXV",
+    "bunnings": "Bunnings NPC",
+    "npc": "Bunnings NPC",
+    "super rugby": "Super Rugby",
+    "srp": "Super Rugby",
+}
+
+
+def _match_keywords(text_low: str, mapping: Dict[str, List[str]], valid_options: List[str]) -> List[str]:
+    hits = []
+    for field, keywords in mapping.items():
+        if field in valid_options and any(k in text_low for k in keywords):
+            hits.append(field)
+    return hits
+
+
+def auto_infer_metadata(description: str, caption: str) -> Dict[str, Any]:
+    """Auto-generate all metadata taxonomies from description and caption text."""
+    combined = f"{description or ''} {caption or ''}".strip().lower()
+    if not combined:
+        return {}
+
+    themes = _match_keywords(combined, THEMES_DICT, THEME_OPTIONS) or ["try", "celebration"]
+    formats = _match_keywords(combined, FORMATS_DICT, FORMAT_OPTIONS) or ["highlight"]
+    tones = _match_keywords(combined, TONES_DICT, TONE_OPTIONS) or ["excitement"]
+    contexts = _match_keywords(combined, CONTEXTS_DICT, CONTEXT_OPTIONS) or ["stadium", "match day"]
+    audios = _match_keywords(combined, AUDIO_FORMATS_DICT, AUDIO_OPTIONS) or ["ambient"]
+    teams = _match_keywords(combined, TEAM_CATEGORIES_DICT, TEAM_OPTIONS) or ["men"]
+
+    people = []
+    for std_name, kws in PEOPLE_MAP_DICT.items():
+        if std_name in PEOPLE_OPTIONS and any(k in combined for k in kws):
+            people.append(std_name)
+    if not people:
+        people = ["all blacks"]
+
+    brands = []
+    for std_brand, kws in BRAND_MAP_DICT.items():
+        if std_brand in BRAND_OPTIONS and any(k in combined for k in kws):
+            brands.append(std_brand)
+
+    # Inferred Page/Account
+    detected_pages = []
+    for key, value in PAGES_DICT.items():
+        if key in combined and value in PAGE_OPTIONS:
+            detected_pages.append(value)
+            break
+
+    # Inferred Duration
+    duration = 20.0
+    m = re.search(r"(\d+)\s*(?:sec|seconds|s)\b", combined)
+    if m:
+        duration = float(max(5, min(int(m.group(1)), 120)))
+    elif re.search(r"\b(minute|min)\b", combined):
+        duration = 60.0
+
+    return {
+        "content_theme": themes,
+        "format_access": formats,
+        "tone": tones,
+        "context": contexts,
+        "audio_format": audios,
+        "overall_team": teams,
+        "people": people,
+        "brands": brands,
+        "account_pages": detected_pages,
+        "duration_seconds": duration,
+    }
+
+# ---------------------------------------------------------------------------
 # Custom CSS: Light Minimalist Theme
 # ---------------------------------------------------------------------------
 st.markdown(
@@ -260,25 +462,38 @@ html, body, [data-testid="stAppViewContainer"] {
     margin-top: 0.25rem;
 }
 
-/* Clean Card Wrapper */
+/* Clean Card Wrapper with subtle hover elevation */
 [data-testid="stVerticalBlockBorderWrapper"] {
-    background: #F4F4F6 !important;
+    background: #FFFFFF !important;
     border: 1px solid rgba(0, 0, 0, 0.08) !important;
     border-radius: 12px !important;
     padding: 1.25rem 1.4rem !important;
     margin-bottom: 1rem !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02) !important;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease !important;
+}
+
+[data-testid="stVerticalBlockBorderWrapper"]:hover {
+    border-color: rgba(0, 0, 0, 0.14) !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.04) !important;
 }
 
 /* Tabs Styling */
 button[data-baseweb="tab"] {
-    background-color: #F4F4F6 !important;
+    background-color: #F8FAFC !important;
     border: 1px solid rgba(0, 0, 0, 0.08) !important;
     border-radius: 8px 8px 0 0 !important;
-    padding: 0.6rem 1.25rem !important;
+    padding: 0.65rem 1.35rem !important;
     font-size: 0.9rem !important;
     font-weight: 600 !important;
-    color: #555555 !important;
+    color: #64748B !important;
     margin-right: 0.35rem !important;
+    transition: all 0.15s ease !important;
+}
+
+button[data-baseweb="tab"]:hover {
+    color: #0F172A !important;
+    background-color: #F1F5F9 !important;
 }
 
 button[data-baseweb="tab"][aria-selected="true"] {
@@ -286,55 +501,13 @@ button[data-baseweb="tab"][aria-selected="true"] {
     border-color: rgba(0, 0, 0, 0.15) !important;
     border-bottom: 2px solid #0D0D0D !important;
     color: #0D0D0D !important;
+    font-weight: 700 !important;
 }
 
 div[data-baseweb="tab-list"] {
     gap: 4px !important;
     border-bottom: 1px solid rgba(0, 0, 0, 0.1) !important;
     margin-bottom: 1rem !important;
-}
-
-/* Quadrant Styles */
-.quadrant-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.85rem;
-    margin: 1rem 0;
-}
-
-.quadrant-box {
-    background: #FFFFFF;
-    border: 1.5px solid rgba(0, 0, 0, 0.08);
-    border-radius: 10px;
-    padding: 1.2rem;
-    text-align: center;
-    transition: all 0.2s ease;
-}
-
-.quadrant-active {
-    border-color: #009E60 !important;
-    background: #F0FDF4 !important;
-    box-shadow: 0 4px 14px rgba(0, 158, 96, 0.12) !important;
-}
-
-.quadrant-tag {
-    font-size: 0.72rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 0.35rem;
-}
-
-.quadrant-title {
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: #0D0D0D;
-    margin-bottom: 0.25rem;
-}
-
-.quadrant-desc {
-    font-size: 0.8rem;
-    color: #555555;
 }
 
 /* Metric Display Cards */
@@ -344,14 +517,16 @@ div[data-baseweb="tab-list"] {
     border-radius: 10px;
     padding: 1.2rem;
     text-align: center;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
 }
 
 .metric-label {
     font-size: 0.78rem;
     font-weight: 600;
     text-transform: uppercase;
-    color: #555555;
+    color: #64748B;
     margin-bottom: 0.25rem;
+    letter-spacing: 0.04em;
 }
 
 .metric-value {
@@ -361,19 +536,34 @@ div[data-baseweb="tab-list"] {
     letter-spacing: -0.02em;
 }
 
-/* Buttons */
+/* Primary Action Button with Gradient & Pulse */
 div.stButton > button {
     border-radius: 8px !important;
     font-weight: 600 !important;
-    background-color: #0D0D0D !important;
+    background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%) !important;
     color: #FFFFFF !important;
-    border: none !important;
-    padding: 0.65rem 1.5rem !important;
-    transition: background-color 0.15s ease !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    padding: 0.75rem 1.6rem !important;
+    font-size: 0.95rem !important;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15) !important;
+    transition: transform 0.15s ease, box-shadow 0.15s ease !important;
 }
 
 div.stButton > button:hover {
-    background-color: #262626 !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.25) !important;
+}
+
+div.stButton > button:active {
+    transform: translateY(0px) !important;
+}
+
+/* Status Widget Modern Look */
+[data-testid="stStatusWidget"] {
+    background: #FFFFFF !important;
+    border: 1px solid rgba(0, 0, 0, 0.1) !important;
+    border-radius: 10px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04) !important;
 }
 </style>
 """,
@@ -497,6 +687,32 @@ def _tier_is_high(bin_label: str) -> bool:
     return str(bin_label).endswith("1") or ("high" in str(bin_label).lower())
 
 
+def format_tier_label(bin_label: str, metric_type: str = "views") -> str:
+    """Convert raw machine bin labels to clean human-readable titles.
+    
+    Examples:
+        'views_0' -> 'Low Views'
+        'views_1' -> 'High Views'
+        'engagement_0' -> 'Low Engagement'
+        'engagement_1' -> 'High Engagement'
+    """
+    is_hi = _tier_is_high(bin_label)
+    if metric_type.lower().startswith("view"):
+        return "High Views" if is_hi else "Low Views"
+    else:
+        return "High Engagement" if is_hi else "Low Engagement"
+
+
+def format_dual_tier(views_bin: str, eng_bin: str) -> str:
+    """Convert a pair of bin labels to a unified clean label.
+    
+    Example: ('views_1', 'engagement_1') -> 'High Views · High Engagement'
+    """
+    v_text = format_tier_label(views_bin, "views")
+    e_text = format_tier_label(eng_bin, "engagement")
+    return f"{v_text} · {e_text}"
+
+
 def _tier_center(
     views_high: bool,
     eng_high: bool,
@@ -552,27 +768,68 @@ st.markdown(
 <div class="section-header">
     <div class="section-tag">Section 1</div>
     <div class="section-title">Creative Content</div>
-    <div class="section-subtitle">Define the video action narrative and post caption.</div>
+    <div class="section-subtitle">Define the video action narrative and post caption. Metadata fields below auto-populate on edit.</div>
 </div>
 """,
     unsafe_allow_html=True,
 )
+
+# Initialize Session State Defaults
+if "init_defaults" not in st.session_state:
+    st.session_state.init_defaults = True
+    st.session_state.video_description = "A male rugby player sprints downfield, breaks a tackle and scores a try under the posts."
+    st.session_state.post_caption = "@jacobkneepkens crosses the chalk 🤙 #AllBlacks #TryTime"
+    st.session_state.last_inferred_text = ""
+    st.session_state.meta_theme = ["try", "celebration"]
+    st.session_state.meta_format = ["highlight"]
+    st.session_state.meta_people = ["all blacks"]
+    st.session_state.meta_brands = []
+    st.session_state.meta_event = []
+    st.session_state.meta_tone = ["excitement"]
+    st.session_state.meta_context = ["stadium", "match day"]
+    st.session_state.meta_team = ["men"]
+    st.session_state.meta_audio = ["ambient"]
+    st.session_state.meta_pages = []
+    st.session_state.meta_duration = 20.0
+
+# Callback function when description or caption changes (triggers on blur / enter)
+def on_text_changed():
+    desc = st.session_state.get("video_description_input", "")
+    cap = st.session_state.get("post_caption_input", "")
+    inferred = auto_infer_metadata(desc, cap)
+    if inferred:
+        st.session_state.meta_theme = inferred.get("content_theme", ["try", "celebration"])
+        st.session_state.meta_format = inferred.get("format_access", ["highlight"])
+        st.session_state.meta_people = inferred.get("people", ["all blacks"])
+        st.session_state.meta_brands = inferred.get("brands", [])
+        st.session_state.meta_tone = inferred.get("tone", ["excitement"])
+        st.session_state.meta_context = inferred.get("context", ["stadium", "match day"])
+        st.session_state.meta_team = inferred.get("overall_team", ["men"])
+        st.session_state.meta_audio = inferred.get("audio_format", ["ambient"])
+        if inferred.get("account_pages"):
+            st.session_state.meta_pages = inferred.get("account_pages")
+        if inferred.get("duration_seconds"):
+            st.session_state.meta_duration = inferred.get("duration_seconds")
 
 col_s1_a, col_s1_b = st.columns(2, gap="medium")
 
 with col_s1_a:
     video_description = st.text_area(
         "Video Description (Play-by-play)",
-        value="A male rugby player sprints downfield, breaks a tackle and scores a try under the posts.",
+        value=st.session_state.get("video_description", "A male rugby player sprints downfield, breaks a tackle and scores a try under the posts."),
+        key="video_description_input",
         height=130,
+        on_change=on_text_changed,
         help="Detailed play-by-play visual and action sequence (maps to description_json.play_by_play).",
     )
 
 with col_s1_b:
     post_caption = st.text_area(
         "Caption (Post Copy)",
-        value="@jacobkneepkens crosses the chalk 🤙 #AllBlacks #TryTime",
+        value=st.session_state.get("post_caption", "@jacobkneepkens crosses the chalk 🤙 #AllBlacks #TryTime"),
+        key="post_caption_input",
         height=130,
+        on_change=on_text_changed,
         help="Social media caption, hashtags, and mentions (maps to DataFrame content).",
     )
 
@@ -608,7 +865,7 @@ with st.container(border=True):
         selected_pages = st.multiselect(
             "Account / Channel",
             options=PAGE_OPTIONS,
-            default=[],  # Default to nothing selected as requested
+            default=st.session_state.get("meta_pages", []),
             help="Target team or brand channel (defaults to nothing selected).",
         )
 
@@ -617,31 +874,75 @@ with st.container(border=True):
             "Duration (seconds)",
             min_value=1.0,
             max_value=300.0,
-            value=20.0,  # Default to 20 as requested
+            value=float(st.session_state.get("meta_duration", 20.0)),
             step=1.0,
             help="Runtime of the video clip in seconds (default: 20).",
         )
 
 # Part B: description_json fields
 with st.container(border=True):
-    st.markdown('<div style="font-size:0.92rem; font-weight:700; color:#0D0D0D; margin-bottom:0.75rem;">Part B: description_json Fields</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+            <div style="font-size:0.92rem; font-weight:700; color:#0D0D0D;">Part B: description_json Fields</div>
+            <div style="font-size:0.75rem; color:#6B7280;">⚡ Auto-populated from content above (editable)</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     col_pB1, col_pB2, col_pB3 = st.columns(3, gap="medium")
 
     with col_pB1:
-        sel_theme = st.multiselect("Content Theme", options=THEME_OPTIONS, default=["try", "celebration"])
-        sel_format = st.multiselect("Format Access", options=FORMAT_OPTIONS, default=["highlight"])
-        sel_people = st.multiselect("People / Entities", options=PEOPLE_OPTIONS, default=["all blacks"])
+        sel_theme = st.multiselect(
+            "Content Theme",
+            options=THEME_OPTIONS,
+            default=[x for x in st.session_state.get("meta_theme", ["try", "celebration"]) if x in THEME_OPTIONS],
+        )
+        sel_format = st.multiselect(
+            "Format Access",
+            options=FORMAT_OPTIONS,
+            default=[x for x in st.session_state.get("meta_format", ["highlight"]) if x in FORMAT_OPTIONS],
+        )
+        sel_people = st.multiselect(
+            "People / Entities",
+            options=PEOPLE_OPTIONS,
+            default=[x for x in st.session_state.get("meta_people", ["all blacks"]) if x in PEOPLE_OPTIONS],
+        )
 
     with col_pB2:
-        sel_brands = st.multiselect("Brands / Sponsors", options=BRAND_OPTIONS, default=[])
-        sel_event = st.multiselect("Event / Competition", options=EVENT_OPTIONS, default=[])
-        sel_tone = st.multiselect("Tone", options=TONE_OPTIONS, default=["excitement"])
+        sel_brands = st.multiselect(
+            "Brands / Sponsors",
+            options=BRAND_OPTIONS,
+            default=[x for x in st.session_state.get("meta_brands", []) if x in BRAND_OPTIONS],
+        )
+        sel_event = st.multiselect(
+            "Event / Competition",
+            options=EVENT_OPTIONS,
+            default=st.session_state.get("meta_event", []),
+        )
+        sel_tone = st.multiselect(
+            "Tone",
+            options=TONE_OPTIONS,
+            default=[x for x in st.session_state.get("meta_tone", ["excitement"]) if x in TONE_OPTIONS],
+        )
 
     with col_pB3:
-        sel_context = st.multiselect("Context / Setting", options=CONTEXT_OPTIONS, default=["stadium", "match day"])
-        sel_team = st.multiselect("Overall Team", options=TEAM_OPTIONS, default=["men"])
-        sel_audio = st.multiselect("Audio Format", options=AUDIO_OPTIONS, default=["ambient"])
+        sel_context = st.multiselect(
+            "Context / Setting",
+            options=CONTEXT_OPTIONS,
+            default=[x for x in st.session_state.get("meta_context", ["stadium", "match day"]) if x in CONTEXT_OPTIONS],
+        )
+        sel_team = st.multiselect(
+            "Overall Team",
+            options=TEAM_OPTIONS,
+            default=[x for x in st.session_state.get("meta_team", ["men"]) if x in TEAM_OPTIONS],
+        )
+        sel_audio = st.multiselect(
+            "Audio Format",
+            options=AUDIO_OPTIONS,
+            default=[x for x in st.session_state.get("meta_audio", ["ambient"]) if x in AUDIO_OPTIONS],
+        )
 
 # ---------------------------------------------------------------------------
 # Storage / Persistence Helper
@@ -692,12 +993,94 @@ if "last_results" not in st.session_state:
 
 # If user clicked the button or results exist in session state
 if run_btn:
-    with st.status("🎬 Processing video concept through ML models...", expanded=True) as status:
-        st.write("1. Building feature representations from play-by-play narrative and metadata...")
+    with st.status("🚀 Running Social Media Optimizer Intelligence Engine...", expanded=True) as status:
+        prog_bar = st.progress(0)
+        step_box = st.empty()
+        
+        # Step definitions
+        total_platforms = len(eval_platforms)
+        total_steps = 2 + total_platforms  # Step 1 (NLP), Step 2..N+1 (Platforms), Final Step (ROI Synthesis)
+
+        def render_steps(active_step_idx: int, completed_steps: list[str], current_detail: str = ""):
+            """Render a clean animated step-by-step progress card."""
+            steps_data = [
+                ("1", "Extract NLP Tokens & Cluster Embeddings", "Parsing play-by-play narrative and semantic vocabularies"),
+            ]
+            for p_code in eval_platforms:
+                p_name_cur = PLATFORM_NAMES.get(p_code, p_code)
+                steps_data.append((
+                    str(len(steps_data) + 1),
+                    f"Evaluate {p_name_cur} ({p_code})",
+                    "Running SVR linear regressor & Polynomial SVC classifier"
+                ))
+            steps_data.append((
+                str(len(steps_data) + 1),
+                "Synthesize Performance Matrix & Value / ROI",
+                "Calculating CPM media value, net return, and empirical quadrant mapping"
+            ))
+
+            html_card = """
+            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:1rem 1.25rem; margin-top:0.4rem; font-family:'Inter', sans-serif;">
+            """
+            for s_num, s_title, s_desc in steps_data:
+                s_int = int(s_num)
+                if s_int < active_step_idx:
+                    # Completed Step
+                    html_card += f"""
+                    <div style="display:flex; align-items:flex-start; gap:0.75rem; margin-bottom:0.6rem; opacity:0.85;">
+                        <div style="background:#10B981; color:#FFFFFF; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:700; flex-shrink:0;">✓</div>
+                        <div>
+                            <div style="font-size:0.85rem; font-weight:600; color:#0F172A; text-decoration:none;">Step {s_num}/{total_steps}: {s_title}</div>
+                            <div style="font-size:0.75rem; color:#64748B;">{s_desc}</div>
+                        </div>
+                    </div>
+                    """
+                elif s_int == active_step_idx:
+                    # Active Step (Highlighted with glowing pulse)
+                    detail_text = f"<div style='font-size:0.75rem; color:#2563EB; margin-top:0.15rem; font-weight:500;'>⏳ {current_detail}</div>" if current_detail else f"<div style='font-size:0.75rem; color:#64748B;'>{s_desc}</div>"
+                    html_card += f"""
+                    <div style="display:flex; align-items:flex-start; gap:0.75rem; margin-bottom:0.6rem; background:#EFF6FF; border:1px solid #BFDBFE; border-radius:8px; padding:0.5rem 0.65rem;">
+                        <div style="background:#2563EB; color:#FFFFFF; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:700; flex-shrink:0; animation: pulse 1.5s infinite;">{s_num}</div>
+                        <div>
+                            <div style="font-size:0.85rem; font-weight:700; color:#1E40AF;">Step {s_num}/{total_steps}: {s_title}</div>
+                            {detail_text}
+                        </div>
+                    </div>
+                    """
+                else:
+                    # Pending Step
+                    html_card += f"""
+                    <div style="display:flex; align-items:flex-start; gap:0.75rem; margin-bottom:0.6rem; opacity:0.45;">
+                        <div style="background:#E2E8F0; color:#64748B; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:700; flex-shrink:0;">{s_num}</div>
+                        <div>
+                            <div style="font-size:0.85rem; font-weight:600; color:#334155;">Step {s_num}/{total_steps}: {s_title}</div>
+                            <div style="font-size:0.75rem; color:#94A3B8;">{s_desc}</div>
+                        </div>
+                    </div>
+                    """
+            html_card += "</div>"
+            step_box.markdown(html_card, unsafe_allow_html=True)
+
+        # -------------------------------------------------------------------
+        # Step 1: Feature Extraction
+        # -------------------------------------------------------------------
+        current_step_num = 1
+        prog_bar.progress(10)
+        render_steps(current_step_num, [], "Extracting multi-hot tokens, entity tags, and clustering...")
+        time.sleep(0.3)
+
         results_by_platform: Dict[str, Dict[str, Any]] = {}
 
-        for p_code in eval_platforms:
-            st.write(f"2. Evaluating **{PLATFORM_NAMES.get(p_code, p_code)} ({p_code})** with Support Vector Regression and Classifier...")
+        # -------------------------------------------------------------------
+        # Steps 2..N+1: Platform Evaluation
+        # -------------------------------------------------------------------
+        for idx, p_code in enumerate(eval_platforms):
+            current_step_num = 2 + idx
+            step_pct = int(10 + ((idx + 1) / total_steps) * 80)
+            prog_bar.progress(step_pct)
+            p_name_cur = PLATFORM_NAMES.get(p_code, p_code)
+            render_steps(current_step_num, [], f"Computing Support Vector predictions for {p_name_cur}...")
+
             df_single = build_model_dataframe(
                 caption=post_caption,
                 play_by_play=video_description,
@@ -724,6 +1107,15 @@ if run_btn:
                 }
             except Exception as e:
                 st.error(f"Inference error for {p_code}: {e}")
+            time.sleep(0.25)
+
+        # -------------------------------------------------------------------
+        # Final Step: Valuation & Quadrant Synthesis
+        # -------------------------------------------------------------------
+        current_step_num = total_steps
+        prog_bar.progress(95)
+        render_steps(current_step_num, [], "Synthesizing cross-platform matrix and budget metrics...")
+        time.sleep(0.25)
 
         # Save to session and disk
         st.session_state.last_results = {
@@ -760,12 +1152,17 @@ if run_btn:
                     "projected_engagement": results_by_platform[p]["lin"].get("engagement"),
                     "quadrant_views": results_by_platform[p]["clas"].get("views"),
                     "quadrant_engagement": results_by_platform[p]["clas"].get("engagement"),
+                    "quadrant_tier": format_dual_tier(
+                        results_by_platform[p]["clas"].get("views", "views_0"),
+                        results_by_platform[p]["clas"].get("engagement", "engagement_0"),
+                    ),
                 }
                 for p in results_by_platform
             }
         }
         save_prediction_record(record)
-        status.update(label="✅ Inference complete! Performance estimates calculated.", state="complete", expanded=False)
+        prog_bar.progress(100)
+        status.update(label="✨ Assessment Complete! Optimized insights generated below.", state="complete", expanded=False)
 
 # ---------------------------------------------------------------------------
 # SECTION 3: OUTPUT (Part A: 2x2 Quadrant, Part B: Regressions, Part C: Calculator)
@@ -818,7 +1215,7 @@ else:
                 """
                 <div style="margin-bottom:0.6rem;">
                     <div style="font-size:0.95rem; font-weight:700; color:#0D0D0D;">Part A: All-Platform Comparative Performance Matrix</div>
-                    <div style="font-size:0.8rem; color:#6B7280;">All platforms positioned by their SVC classification tier — split lines are the high/low bin thresholds.</div>
+                    <div style="font-size:0.8rem; color:#6B7280;">Simultaneous categorical placement of all evaluated platforms into their predicted classification cells.</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -830,8 +1227,10 @@ else:
             all_v = [max(0.0, float(results_by_platform[p]["lin"].get("views", 0.0))) for p in eval_platforms]
             all_e = [max(0.0, float(results_by_platform[p]["lin"].get("engagement", 0.0))) for p in eval_platforms]
             
-            ref_v = classifier_bin_thresholds()["views"]
-            ref_e = classifier_bin_thresholds()["eng"]
+            # Quadrant split lines = predict_clas high/low bin thresholds
+            _thr_all = classifier_bin_thresholds()
+            ref_v = _thr_all["views"]
+            ref_e = _thr_all["eng"]
             max_v_all = max(max(all_v) * 1.3, ref_v * 2.2, 50000)
             max_e_all = max(max(all_e) * 1.3, ref_e * 2.2, 2500)
 
@@ -846,10 +1245,10 @@ else:
             fig_all.add_hline(y=ref_e, line=dict(color="rgba(15, 23, 42, 0.25)", width=1.5, dash="dot"))
 
             # Corner Annotations
-            fig_all.add_annotation(x=ref_v * 0.48, y=max_e_all * 1.1, text="<b>NICHE / DISCUSSION</b>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#A16207"))
-            fig_all.add_annotation(x=ref_v + (max_v_all - ref_v) * 0.52, y=max_e_all * 1.1, text="<b>OPTIMAL VIRAL HIT</b>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#15803D"))
-            fig_all.add_annotation(x=ref_v * 0.48, y=ref_e * 0.16, text="<b>LOW SIGNAL</b>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#BE123C"))
-            fig_all.add_annotation(x=ref_v + (max_v_all - ref_v) * 0.52, y=ref_e * 0.16, text="<b>BROAD AWARENESS</b>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#1D4ED8"))
+            fig_all.add_annotation(x=ref_v * 0.48, y=max_e_all * 1.1, text="<b>NICHE / DISCUSSION</b><br><span style='font-size:10px; color:#854D0E;'>Low Views · High Engagement</span>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#A16207"))
+            fig_all.add_annotation(x=ref_v + (max_v_all - ref_v) * 0.52, y=max_e_all * 1.1, text="<b>OPTIMAL VIRAL HIT</b><br><span style='font-size:10px; color:#14532D;'>High Views · High Engagement</span>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#15803D"))
+            fig_all.add_annotation(x=ref_v * 0.48, y=ref_e * 0.16, text="<b>LOW SIGNAL</b><br><span style='font-size:10px; color:#881337;'>Low Views · Low Engagement</span>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#BE123C"))
+            fig_all.add_annotation(x=ref_v + (max_v_all - ref_v) * 0.52, y=ref_e * 0.16, text="<b>BROAD AWARENESS</b><br><span style='font-size:10px; color:#1E3A8A;'>High Views · Low Engagement</span>", showarrow=False, font=dict(family="Inter, sans-serif", size=10, color="#1D4ED8"))
 
             PLATFORM_PALETTE = {
                 "FB": "#1877F2",
@@ -877,6 +1276,7 @@ else:
                 p_x += _dx * (ref_v if not _v_hi else max_v_all * 1.25 - ref_v)
                 p_y += _dy * (ref_e if not _e_hi else max_e_all * 1.25 - ref_e)
                 p_col = PLATFORM_PALETTE.get(p, "#2563EB")
+                clean_tier = format_dual_tier(p_clas.get("views", "views_0"), p_clas.get("engagement", "engagement_0"))
 
                 # Halo ring
                 fig_all.add_trace(
@@ -905,7 +1305,7 @@ else:
                         hoverinfo="text",
                         hovertext=(
                             f"<b>{PLATFORM_NAMES.get(p, p)} ({p})</b><br>"
-                            f"Tier: <b>{p_clas.get('views')} · {p_clas.get('engagement')}</b><br>"
+                            f"Predicted Tier: <b>{clean_tier}</b><br>"
                             f"Regression: {p_v:,.0f} views · {p_e:,.0f} engagements"
                         ),
                     )
@@ -918,7 +1318,7 @@ else:
                 plot_bgcolor="#FAFAFC",
                 hovermode=False,
                 xaxis=dict(
-                    title="<b>Views Classification Tier (All Platforms)</b>",
+                    title="<b>Views Tier (Low Views ⟵ Split ⟶ High Views)</b>",
                     title_font=dict(size=11, color="#64748B", family="Inter, sans-serif"),
                     range=[0, max_v_all * 1.15],
                     showgrid=False,
@@ -928,7 +1328,7 @@ else:
                     tickfont=dict(size=10, color="#64748B"),
                 ),
                 yaxis=dict(
-                    title="<b>Engagement Classification Tier (All Platforms)</b>",
+                    title="<b>Engagement Tier (Low Engagement ⟵ Split ⟶ High Engagement)</b>",
                     title_font=dict(size=11, color="#64748B", family="Inter, sans-serif"),
                     range=[0, max_e_all * 1.15],
                     showgrid=False,
@@ -956,10 +1356,11 @@ else:
                 gross_val = ((p_v / 1000.0) * p_cpm) + (p_e * p_eng_rate)
                 net_val = gross_val - 500.0
                 roi_val = ((gross_val - 500.0) / 500.0 * 100.0)
+                clean_tier = format_dual_tier(p_clas.get("views", "views_0"), p_clas.get("engagement", "engagement_0"))
 
                 comp_rows.append({
                     "Platform": f"{PLATFORM_NAMES.get(p, p)} ({p})",
-                    "Classification Tier": f"{p_clas.get('views')} · {p_clas.get('engagement')}",
+                    "Classification Tier": clean_tier,
                     "Predicted Views": f"{p_v:,.0f}",
                     "Predicted Engagements": f"{p_e:,.0f}",
                     "Est. Media Value": f"${gross_val:,.2f}",
@@ -986,6 +1387,7 @@ else:
             # Parse 0/1 bin index
             v_is_high = views_bin.endswith("1") or ("high" in views_bin.lower())
             e_is_high = eng_bin.endswith("1") or ("high" in eng_bin.lower())
+            clean_tier = format_dual_tier(views_bin, eng_bin)
 
             # Top Platform Header
             p_name = PLATFORM_NAMES.get(p_code, p_code)
@@ -1001,8 +1403,8 @@ else:
                 f'</div>'
                 f'</div>'
                 f'<div style="text-align:right;">'
-                f'<div style="font-size:0.75rem; font-weight:600; color:#555555; text-transform:uppercase;">Classification Bin</div>'
-                f'<div style="font-size:1.15rem; font-weight:800; color:#0D0D0D;">{views_bin} / {eng_bin}</div>'
+                f'<div style="font-size:0.75rem; font-weight:600; color:#555555; text-transform:uppercase;">Predicted Tier</div>'
+                f'<div style="font-size:1.05rem; font-weight:800; color:#0D0D0D;">{clean_tier}</div>'
                 f'</div>'
                 f'</div>'
             )
@@ -1194,7 +1596,7 @@ else:
                     plot_bgcolor="#FAFAFC",
                     hovermode=False,
                     xaxis=dict(
-                        title="<b>Views Classification Tier</b>",
+                        title="<b>Views Tier (Low Views ⟵ Split ⟶ High Views)</b>",
                         title_font=dict(size=11, color="#64748B", family="Inter, system-ui, sans-serif"),
                         range=[0, max_v * 1.15],
                         showgrid=False,
@@ -1204,7 +1606,7 @@ else:
                         tickfont=dict(size=10, color="#64748B"),
                     ),
                     yaxis=dict(
-                        title="<b>Engagement Classification Tier</b>",
+                        title="<b>Engagement Tier (Low Engagement ⟵ Split ⟶ High Engagement)</b>",
                         title_font=dict(size=11, color="#64748B", family="Inter, system-ui, sans-serif"),
                         range=[0, max_e * 1.15],
                         showgrid=False,
@@ -1235,16 +1637,16 @@ else:
                     f"""
                     <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:0.6rem; margin-top:0.4rem;">
                         <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:0.6rem 0.8rem; text-align:center;">
-                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Views vs High Bin</div>
+                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Views vs High Split</div>
                             <div style="font-size:1.05rem; font-weight:700; color:{badge_v_color}; margin-top:0.1rem;">{v_ratio:.0f}%</div>
                         </div>
                         <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:0.6rem 0.8rem; text-align:center;">
-                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Engagement vs High Bin</div>
+                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Engagement vs High Split</div>
                             <div style="font-size:1.05rem; font-weight:700; color:{badge_e_color}; margin-top:0.1rem;">{e_ratio:.0f}%</div>
                         </div>
                         <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:0.6rem 0.8rem; text-align:center;">
-                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Predicted Bin</div>
-                            <div style="font-size:1.05rem; font-weight:700; color:#0F172A; margin-top:0.1rem;">{views_bin.upper()} · {eng_bin.upper()}</div>
+                            <div style="font-size:0.7rem; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.04em;">Predicted Tier</div>
+                            <div style="font-size:1.05rem; font-weight:700; color:#0F172A; margin-top:0.1rem;">{clean_tier}</div>
                         </div>
                     </div>
                     """,
