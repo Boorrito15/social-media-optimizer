@@ -1107,6 +1107,7 @@ if run_btn:
                 }
             except Exception as e:
                 st.error(f"Inference error for {p_code}: {e}")
+                raise e
             time.sleep(0.25)
 
         # -------------------------------------------------------------------
@@ -1182,13 +1183,17 @@ if not st.session_state.last_results:
     st.info("👈 Configure your creative content and parameters above, then click **'🚀 Run Model Inference'** to generate predictions.")
 else:
     active_run = st.session_state.last_results
-    results_by_platform = active_run["results"]
-    eval_platforms = active_run["platforms"]
-    eval_page = active_run["page"]
+    results_by_platform = active_run.get("results", {})
+    # Filter to platforms successfully evaluated
+    eval_platforms = [p for p in active_run.get("platforms", []) if p in results_by_platform]
+    eval_page = active_run.get("page", "All Blacks")
 
-    # Build tabs: All Platforms master comparison + individual platform tabs
-    all_tab_labels = ["🌐 All Platforms (Overview)"] + [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in eval_platforms]
-    tabs = st.tabs(all_tab_labels)
+    if not eval_platforms:
+        st.error("No platform evaluations were successfully generated. Please check model inputs and try again.")
+    else:
+        # Build tabs: All Platforms master comparison + individual platform tabs
+        all_tab_labels = ["🌐 All Platforms (Overview)"] + [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in eval_platforms]
+        tabs = st.tabs(all_tab_labels)
 
     # -----------------------------------------------------------------------
     # TAB 0: ALL PLATFORMS MASTER OVERVIEW
