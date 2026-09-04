@@ -13,9 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY requirements-scraper.txt .
-RUN pip install --no-cache-dir -r requirements-scraper.txt
+# Install Python dependencies (consolidated requirements.txt)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source code and utilities
 COPY src/ ./src/
